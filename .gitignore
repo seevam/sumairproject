@@ -1,0 +1,31 @@
+# Node
+node_modules/
+dist/
+*.local
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local data - never commit participant data
+*.db
+*.sqlite3
+*.csv
+!**/sample_*.csv
+
+# Env
+.env
+.env.*
+!.env.example
+
+# Editors / OS
+.DS_Store
+.vscode/
+.idea/
+
+# Scratch
+_smoke.mjs
+_urlcheck.mjs
+.pytest_cache/

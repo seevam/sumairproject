@@ -1,0 +1,29 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html, body, #root { height: 100%; }
+  body {
+    @apply bg-bg text-white font-sans antialiased;
+    font-feature-settings: 'cv11', 'ss01';
+  }
+  * { -webkit-tap-highlight-color: transparent; }
+}
+
+@layer components {
+  .card { @apply bg-surface border border-line rounded-card; }
+  .btn { @apply inline-flex items-center justify-center gap-2 rounded-btn px-5 py-3 text-sm font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed; }
+  .btn-primary { @apply btn bg-accent text-[#04140A] hover:bg-[#22d364]; }
+  .btn-secondary { @apply btn border border-line text-white hover:bg-white/5; }
+  .btn-tertiary { @apply btn text-muted hover:text-white px-3; }
+  .btn-danger { @apply btn border border-danger/60 text-danger hover:bg-danger/10; }
+  .label { @apply text-xs font-medium uppercase tracking-wider text-muted; }
+  .input { @apply w-full rounded-input border border-line bg-bg px-3 py-2 text-sm text-white outline-none focus:border-accent; }
+}
+
+/* Numeric readouts should not jitter as digits change. */
+.tabular { font-variant-numeric: tabular-nums; }
+
+@keyframes pulse-dot { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
+.rec-dot { animation: pulse-dot 1.6s ease-in-out infinite; }

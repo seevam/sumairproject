@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: postureguard-api
+    runtime: python
+    rootDir: backend
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 2 --timeout 60
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11"
+      - key: ALLOWED_ORIGINS
+        # Set this to your deployed frontend origin once Vercel gives you one.
+        sync: false
+      - key: POSTUREGUARD_DB
+        # Render's free tier has an ephemeral filesystem: the SQLite file is
+        # wiped on every redeploy and on idle spin-down. That is acceptable
+        # because the browser keeps the authoritative copy and re-syncs, but
+        # export from the browser is the reliable path for the pilot dataset.
+        value: /tmp/postureguard.db
