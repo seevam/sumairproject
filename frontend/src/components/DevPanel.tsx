@@ -50,6 +50,14 @@ export function DevPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled])
 
+  // Expose the engine for automated tests and console poking, but only while
+  // dev mode is on - it is never reachable in a participant's session.
+  useEffect(() => {
+    const w = window as unknown as { __pgSession?: typeof useSession }
+    if (enabled) w.__pgSession = useSession
+    else delete w.__pgSession
+  }, [enabled])
+
   if (!enabled) return null
 
   const scales = [1, 10, 60, 300]

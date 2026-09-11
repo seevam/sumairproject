@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { clearCalibration, deleteAllData, loadCalibration } from '../lib/db'
 import { requestNotificationPermission, notificationPermission } from '../lib/notify'
 import { MODE_PRESETS, useSettings } from '../store/settings'
+import { SAME_ORIGIN, detectSameOriginBackend } from '../lib/sync'
 import { useSession } from '../store/session'
 import { shortDate, shortTime } from '../lib/time'
 import type { ActivityType, CalibrationBaseline, Mode, NotificationStyle, Sensitivity } from '../types'
@@ -20,9 +21,13 @@ export function Settings() {
   const [baseline, setBaseline] = useState<CalibrationBaseline | null>(null)
   const [notifPerm, setNotifPerm] = useState(notificationPermission())
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [localBackend, setLocalBackend] = useState<boolean | null>(null)
 
   useEffect(() => {
     void loadCalibration().then((c) => setBaseline(c ?? null))
+    // Only tells us whether a backend exists on this origin. Nothing is sent
+    // anywhere until the user opts in below.
+    void detectSameOriginBackend().then(setLocalBackend)
   }, [])
 
   const sessionRunning = phase !== 'idle' && phase !== 'ended'
@@ -183,17 +188,39 @@ export function Settings() {
             />
           </div>
           <div>
-            <label className="label" htmlFor="api">Backend URL (optional)</label>
+            <label className="label" htmlFor="api">Session sync (optional)</label>
+
+            {localBackend && (
+              <div className="mt-1.5 flex flex-wrap items-center gap-3 rounded-btn border border-line p-3">
+                <p className="flex-1 text-xs text-muted">
+                  {settings.apiBaseUrl === SAME_ORIGIN
+                    ? 'Syncing completed sessions to this deployment\u2019s server.'
+                    : 'This deployment includes a research server. Sync is off until you switch it on.'}
+                </p>
+                {settings.apiBaseUrl === SAME_ORIGIN ? (
+                  <button className="btn-tertiary" onClick={() => settings.update({ apiBaseUrl: '' })}>
+                    Turn off
+                  </button>
+                ) : (
+                  <button className="btn-secondary" onClick={() => settings.update({ apiBaseUrl: SAME_ORIGIN })}>
+                    Sync to this server
+                  </button>
+                )}
+              </div>
+            )}
+
             <input
               id="api"
-              className="input mt-1"
-              placeholder="https://postureguard-api.onrender.com"
-              value={settings.apiBaseUrl}
+              className="input mt-2"
+              placeholder="https://postureguard-api.example.com"
+              value={settings.apiBaseUrl === SAME_ORIGIN ? '' : settings.apiBaseUrl}
+              disabled={settings.apiBaseUrl === SAME_ORIGIN}
               onChange={(e) => settings.update({ apiBaseUrl: e.target.value })}
             />
             <p className="mt-1 text-xs text-muted">
-              Leave blank to stay fully local. When set, completed sessions are mirrored to the server; the camera
-              feed still never leaves this device.
+              Leave blank to stay fully local - nothing is transmitted at all. When set, only completed-session
+              totals and event timestamps are mirrored. Camera frames and pose landmarks never leave this device
+              either way.
             </p>
           </div>
           <label className="flex items-center gap-3 text-sm">

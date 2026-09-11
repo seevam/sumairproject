@@ -9,28 +9,69 @@ import { listSessions, saveSession, listEvents } from './db'
  * Only aggregates and event timestamps are sent - never landmarks, never frames.
  */
 
-function baseUrl(): string {
+/**
+ * Where the backend lives, as a prefix to put in front of "/api/...".
+ *
+ * Three shapes are supported:
+ *   ""                        sync is off, nothing is ever transmitted
+ *   "same-origin"             the backend ships with this deployment (Vercel
+ *                             routes /api to the Python service on this domain)
+ *   "https://host"            a separately hosted backend
+ *
+ * "same-origin" resolves to the empty prefix, so requests go to a relative
+ * "/api/..." path and no CORS preflight is involved.
+ */
+export const SAME_ORIGIN = 'same-origin'
+
+function configured(): string {
   // Read at call time so a change in Settings takes effect without a reload.
   try {
     const raw = localStorage.getItem('postureguard:settings')
     if (raw) {
       const parsed = JSON.parse(raw) as { state?: { apiBaseUrl?: string } }
       const url = parsed.state?.apiBaseUrl?.trim()
-      if (url) return url.replace(/\/$/, '')
+      if (url) return url
     }
   } catch {
     /* fall through to the build-time default */
   }
-  return (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '')
+  return (import.meta.env.VITE_API_BASE_URL ?? '').trim()
+}
+
+function baseUrl(): string {
+  const value = configured()
+  if (!value) return ''
+  if (value === SAME_ORIGIN) return ''
+  // A bare "/" or "/api" also means this origin.
+  if (value.startsWith('/')) return value.replace(/\/+$/, '').replace(/\/api$/, '')
+  return value.replace(/\/+$/, '')
 }
 
 export function syncEnabled(): boolean {
-  return baseUrl().length > 0
+  return configured().length > 0
+}
+
+/**
+ * Probe for a backend on this origin. Used by Settings to offer one-click
+ * enabling when the deployment includes the Python service, rather than
+ * silently switching sync on for everyone.
+ */
+export async function detectSameOriginBackend(): Promise<boolean> {
+  try {
+    const res = await fetch('/api/health', { signal: AbortSignal.timeout(5000) })
+    if (!res.ok) return false
+    const body = (await res.json()) as { status?: string }
+    return body.status === 'ok'
+  } catch {
+    return false
+  }
 }
 
 async function postSession(record: SessionRecord): Promise<boolean> {
+  // Guard on whether sync is configured, not on the resolved prefix: a
+  // same-origin backend correctly resolves to an empty prefix.
+  if (!syncEnabled()) return false
   const url = baseUrl()
-  if (!url) return false
   try {
     const events = await listEvents(record.id)
     const res = await fetch(`${url}/api/session/sync`, {

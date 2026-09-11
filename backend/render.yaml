@@ -13,9 +13,12 @@ services:
       - key: ALLOWED_ORIGINS
         # Set this to your deployed frontend origin once Vercel gives you one.
         sync: false
+      - key: DATABASE_URL
+        # Strongly recommended. Render's free tier has an ephemeral filesystem,
+        # so without Postgres the SQLite file is wiped on every redeploy and on
+        # idle spin-down. The browser keeps the authoritative copy either way,
+        # but server-side data is only durable with this set.
+        sync: false
       - key: POSTUREGUARD_DB
-        # Render's free tier has an ephemeral filesystem: the SQLite file is
-        # wiped on every redeploy and on idle spin-down. That is acceptable
-        # because the browser keeps the authoritative copy and re-syncs, but
-        # export from the browser is the reliable path for the pilot dataset.
+        # Only used when DATABASE_URL is unset.
         value: /tmp/postureguard.db

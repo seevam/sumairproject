@@ -9,53 +9,24 @@ without walking round with a USB stick.
 What it never receives: camera frames, images, or pose landmark coordinates.
 Those stay in the browser by design (PRD 7.6). This service only ever sees
 aggregate session numbers and event timestamps.
+
+Deploys either as a Vercel service (see the root vercel.json - Vercel loads the
+``app`` instance below directly) or as a normal gunicorn process. Storage is
+Postgres when DATABASE_URL is set, SQLite otherwise; see db.py for why that
+matters on serverless hosts.
 """
 
 from __future__ import annotations
 
 import csv
 import io
-import json
 import os
-import sqlite3
 from datetime import datetime, timezone
-from pathlib import Path
 
 from flask import Flask, Response, g, jsonify, request
 from flask_cors import CORS
 
-DB_PATH = Path(os.environ.get("POSTUREGUARD_DB", Path(__file__).parent / "postureguard.db"))
-
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS sessions (
-    id                  TEXT PRIMARY KEY,
-    participant_id      TEXT NOT NULL,
-    start_time          INTEGER NOT NULL,
-    end_time            INTEGER,
-    duration_seconds    INTEGER NOT NULL DEFAULT 0,
-    sitting_seconds     INTEGER NOT NULL DEFAULT 0,
-    mode                TEXT NOT NULL DEFAULT 'study',
-    avg_deviation_pct   REAL NOT NULL DEFAULT 0,
-    posture_alerts      INTEGER NOT NULL DEFAULT 0,
-    breaks_prompted     INTEGER NOT NULL DEFAULT 0,
-    breaks_taken        INTEGER NOT NULL DEFAULT 0,
-    breaks_snoozed      INTEGER NOT NULL DEFAULT 0,
-    received_at         INTEGER NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS events (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id       TEXT NOT NULL,
-    type             TEXT NOT NULL,
-    timestamp        INTEGER NOT NULL,
-    deviation_pct    REAL,
-    duration_seconds INTEGER,
-    UNIQUE (session_id, type, timestamp)
-);
-
-CREATE INDEX IF NOT EXISTS idx_sessions_participant ON sessions(participant_id);
-CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id);
-"""
+import db as store
 
 SESSION_CSV_HEADER = [
     "participant_id",
@@ -72,10 +43,10 @@ SESSION_CSV_HEADER = [
 ]
 
 
-def get_db() -> sqlite3.Connection:
+def get_db() -> store.Connection:
+    """One connection per request, closed by the teardown handler below."""
     if "db" not in g:
-        g.db = sqlite3.connect(DB_PATH)
-        g.db.row_factory = sqlite3.Row
+        g.db = store.connect()
     return g.db
 
 
@@ -87,9 +58,7 @@ def create_app() -> Flask:
     origins = os.environ.get("ALLOWED_ORIGINS", "*")
     CORS(app, resources={r"/api/*": {"origins": origins.split(",") if origins != "*" else "*"}})
 
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.executescript(SCHEMA)
+    store.init_schema()
 
     @app.teardown_appcontext
     def close_db(_exc):
@@ -99,7 +68,11 @@ def create_app() -> Flask:
 
     @app.get("/api/health")
     def health():
-        return jsonify(status="ok", time=datetime.now(timezone.utc).isoformat())
+        return jsonify(
+            status="ok",
+            storage=store.describe(),
+            time=datetime.now(timezone.utc).isoformat(),
+        )
 
     @app.post("/api/session/sync")
     def sync_session():
@@ -188,8 +161,8 @@ def create_app() -> Flask:
             params.append(participant)
         sql += " ORDER BY start_time DESC LIMIT 1000"
 
-        rows = get_db().execute(sql, params).fetchall()
-        return jsonify(sessions=[dict(r) for r in rows])
+        rows = store.rows_to_dicts(get_db().execute(sql, params))
+        return jsonify(sessions=rows)
 
     @app.get("/api/sessions/export")
     def export_sessions():
@@ -202,7 +175,7 @@ def create_app() -> Flask:
             params.append(participant)
         sql += " ORDER BY participant_id, start_time"
 
-        rows = get_db().execute(sql, params).fetchall()
+        rows = store.rows_to_dicts(get_db().execute(sql, params))
 
         buf = io.StringIO()
         writer = csv.writer(buf)
@@ -236,14 +209,16 @@ def create_app() -> Flask:
 
     @app.get("/api/events/export")
     def export_events():
-        rows = get_db().execute(
-            """
-            SELECT e.*, s.participant_id, s.start_time AS session_start
-            FROM events e
-            JOIN sessions s ON s.id = e.session_id
-            ORDER BY e.timestamp
-            """
-        ).fetchall()
+        rows = store.rows_to_dicts(
+            get_db().execute(
+                """
+                SELECT e.*, s.participant_id, s.start_time AS session_start
+                FROM events e
+                JOIN sessions s ON s.id = e.session_id
+                ORDER BY e.timestamp
+                """
+            )
+        )
 
         buf = io.StringIO()
         writer = csv.writer(buf)
@@ -271,16 +246,18 @@ def create_app() -> Flask:
 
     @app.get("/api/stats")
     def stats():
-        row = get_db().execute(
-            """
-            SELECT COUNT(*)                        AS sessions,
-                   COUNT(DISTINCT participant_id)  AS participants,
-                   COALESCE(SUM(sitting_seconds),0) AS sitting_seconds,
-                   COALESCE(SUM(posture_alerts),0)  AS posture_alerts
-            FROM sessions WHERE end_time IS NOT NULL
-            """
-        ).fetchone()
-        return jsonify(dict(row))
+        rows = store.rows_to_dicts(
+            get_db().execute(
+                """
+                SELECT COUNT(*)                         AS sessions,
+                       COUNT(DISTINCT participant_id)   AS participants,
+                       COALESCE(SUM(sitting_seconds),0) AS sitting_seconds,
+                       COALESCE(SUM(posture_alerts),0)  AS posture_alerts
+                FROM sessions WHERE end_time IS NOT NULL
+                """
+            )
+        )
+        return jsonify(rows[0])
 
     @app.delete("/api/participant/<participant_id>")
     def delete_participant(participant_id: str):

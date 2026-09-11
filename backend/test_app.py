@@ -1,28 +1,6 @@
 """End-to-end checks for the sync + export surface."""
 
-import json
 import os
-import tempfile
-
-import pytest
-
-
-@pytest.fixture()
-def client():
-    fd, path = tempfile.mkstemp(suffix=".db")
-    os.close(fd)
-    os.environ["POSTUREGUARD_DB"] = path
-
-    import importlib
-    import app as app_module
-
-    importlib.reload(app_module)
-    application = app_module.create_app()
-    application.config["TESTING"] = True
-    with application.test_client() as c:
-        yield c
-    os.unlink(path)
-
 
 def session_payload(**overrides):
     session = {
@@ -53,7 +31,9 @@ def session_payload(**overrides):
 def test_health(client):
     r = client.get("/api/health")
     assert r.status_code == 200
-    assert r.get_json()["status"] == "ok"
+    body = r.get_json()
+    assert body["status"] == "ok"
+    assert body["storage"] == "postgres" or body["storage"].startswith("sqlite:")
 
 
 def test_sync_stores_a_session(client):

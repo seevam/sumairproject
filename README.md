@@ -50,7 +50,7 @@ This is the core design constraint, not a feature bolted on afterwards.
 
 - **Video never leaves the device.** MediaPipe runs as WebAssembly inside the browser tab. The WASM runtime, the model file and the webfont are all self-hosted, so the app makes **no third-party request at all** — not even for fonts.
 - **No frames are stored.** Landmarks become four numbers and are discarded.
-- **Local-first storage.** Sessions live in the browser's IndexedDB. With no backend URL configured, nothing is transmitted anywhere, ever.
+- **Local-first storage.** Sessions live in the browser's IndexedDB. Sync is **off by default** — even when the deployment ships a backend, Settings shows a one-click opt-in rather than switching it on for you. With sync off, nothing is transmitted anywhere, ever.
 - **The optional backend refuses landmark data.** `POST /api/session/sync` rejects any payload containing landmark, frame, or image fields — the guarantee is enforced server-side, not just promised client-side.
 - **Visible camera indicator** whenever the stream is live, and one-click deletion of all local data in Settings.
 
@@ -104,8 +104,11 @@ or create `frontend/.env` with `VITE_API_BASE_URL=http://localhost:5000`.
 ## Tests
 
 ```bash
-cd frontend && npm test     # 51 unit tests: posture maths, CSV, session engine
-cd backend  && python -m pytest -q   # 12 API tests
+cd frontend && npm test              # 65 unit tests: posture maths, CSV, sync, session engine
+cd backend  && python -m pytest -q   # 12 API tests (SQLite)
+
+# The backend suite must also pass against Postgres, which is what production uses:
+cd backend && DATABASE_URL=postgresql://... python -m pytest -q
 ```
 
 The session-engine suite drives the JITAI timing logic directly — break
@@ -121,6 +124,15 @@ npm run build && npm run preview &
 npm run smoke
 # or against a deployment:
 SMOKE_BASE_URL=https://your-app.vercel.app npm run smoke
+```
+
+A second end-to-end script covers the deployed topology — that sync stays off
+until the user opts in, that a completed session reaches the backend, and that
+the server refuses a payload carrying landmark data:
+
+```bash
+cd backend && python app.py &        # /api on the same origin via the vite proxy
+cd frontend && npm run test:sync
 ```
 
 ---
@@ -144,27 +156,58 @@ can never silently corrupt a real session.
 
 ## Deployment
 
-### Frontend → Vercel
+Both services deploy as **one Vercel project** from the repo-root `vercel.json`.
+Vercel builds each service separately and serves them on a single domain:
 
-1. Import the repo, set **Root Directory** to `frontend`.
-2. `vercel.json` already handles the SPA rewrites, asset caching and the
-   `Permissions-Policy: camera=(self)` header.
-3. Optionally set `VITE_API_BASE_URL` to your backend origin.
+| Path | Service | Root |
+|---|---|---|
+| `/api/*` | Python (Flask) | `backend/` |
+| everything else | Vite SPA | `frontend/` |
 
-HTTPS comes free with Vercel, which the camera API requires.
+Vercel loads the `app` instance in `backend/app.py` directly — it is a supported
+Python entrypoint, so no wrapper module is needed. A rewrite that targets a
+service forwards the **original path**, so Flask's own `/api/...` routes match
+unchanged.
 
-### Backend → Render
+Because the API is same-origin, there is no CORS preflight and nothing to
+configure in the frontend to point it at the backend.
 
-1. `render.yaml` is a blueprint — point Render at the repo and it picks it up.
-2. Set `ALLOWED_ORIGINS` to your Vercel origin so CORS is not left wide open.
+### Required: set `DATABASE_URL`
 
-> **Free-tier caveat:** Render's filesystem is ephemeral and the service spins
-> down when idle, so the server-side SQLite file is not durable. This does not
-> put the pilot dataset at risk — the browser holds the authoritative copy and
-> re-syncs — but **export the CSV from the browser**, not the server, when
-> collecting the study data.
+**Vercel Functions have an ephemeral filesystem.** A SQLite file written there is
+discarded when the instance is recycled, so the backend would accept sessions and
+silently lose them. Set `DATABASE_URL` to a Postgres connection string (Vercel
+Postgres, Neon, Supabase — any of them) and `backend/db.py` uses Postgres instead.
 
----
+Without `DATABASE_URL` the backend still starts and still answers, but **the
+server-side data is not durable**. That is fine for a demo and fatal for a
+two-week study. Local development needs nothing: it falls back to SQLite.
+
+Check which one is live at any time:
+
+```bash
+curl https://your-app.vercel.app/api/health
+# {"status":"ok","storage":"postgres",...}
+```
+
+### Local development with the same topology
+
+The Vite dev and preview servers proxy `/api` to `http://127.0.0.1:5000`, so
+local runs match production exactly:
+
+```bash
+cd backend && python app.py          # terminal 1
+cd frontend && npm run dev           # terminal 2 - /api is proxied for you
+```
+
+Override the target with `VITE_DEV_API_TARGET` if the backend runs elsewhere.
+
+### Alternative: separate hosts
+
+`backend/render.yaml` and `backend/Procfile` still work if you would rather run
+the backend on Render or any other host. In that case set `ALLOWED_ORIGINS` to
+your frontend origin (CORS is needed again) and enter the backend URL in
+**Settings → Research**.
 
 ## Running the pilot study
 
