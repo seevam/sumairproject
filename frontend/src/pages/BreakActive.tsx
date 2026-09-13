@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { mmss } from '../lib/time'
 import { BREAK_MIN_SECONDS, useSession } from '../store/session'
+import { COLOR } from '../lib/theme'
 
 /** Suggested movements (US-21). Short, doable beside a desk, no equipment. */
 const EXERCISES = [
@@ -37,13 +38,13 @@ export function BreakActive() {
 
       <div className="relative mx-auto h-40 w-40">
         <svg viewBox="0 0 120 120" className="h-full w-full -rotate-90">
-          <circle cx="60" cy="60" r="54" fill="none" stroke="#30363D" strokeWidth="8" />
+          <circle cx="60" cy="60" r="54" fill="none" stroke={COLOR.line} strokeWidth="8" />
           <circle
             cx="60"
             cy="60"
             r="54"
             fill="none"
-            stroke={complete ? '#1DB954' : '#F0A500'}
+            stroke={complete ? COLOR.accent : COLOR.warn}
             strokeWidth="8"
             strokeLinecap="round"
             strokeDasharray={CIRCUMFERENCE}

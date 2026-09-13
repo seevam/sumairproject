@@ -120,7 +120,7 @@ export function Settings() {
             <label key={opt.key} className="flex cursor-pointer items-start gap-3 rounded-btn border border-line p-3">
               <input
                 type="checkbox"
-                className="mt-0.5 h-4 w-4 accent-[#1DB954]"
+                className="mt-0.5 h-4 w-4 accent-[#4ADE80]"
                 checked={settings.notificationStyles.includes(opt.key)}
                 onChange={() => void toggleStyle(opt.key)}
               />
@@ -226,7 +226,7 @@ export function Settings() {
           <label className="flex items-center gap-3 text-sm">
             <input
               type="checkbox"
-              className="h-4 w-4 accent-[#1DB954]"
+              className="h-4 w-4 accent-[#4ADE80]"
               checked={settings.showCameraIndicator}
               onChange={(e) => settings.update({ showCameraIndicator: e.target.checked })}
             />

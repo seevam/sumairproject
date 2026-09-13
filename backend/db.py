@@ -34,6 +34,7 @@ _SQLITE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
     id                  TEXT PRIMARY KEY,
     participant_id      TEXT NOT NULL,
+    user_id             TEXT,
     start_time          INTEGER NOT NULL,
     end_time            INTEGER,
     duration_seconds    INTEGER NOT NULL DEFAULT 0,
@@ -58,6 +59,7 @@ CREATE TABLE IF NOT EXISTS events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_participant ON sessions(participant_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id);
 """
 
@@ -65,6 +67,7 @@ _POSTGRES_SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
     id                  TEXT PRIMARY KEY,
     participant_id      TEXT NOT NULL,
+    user_id             TEXT,
     start_time          BIGINT NOT NULL,
     end_time            BIGINT,
     duration_seconds    BIGINT NOT NULL DEFAULT 0,
@@ -89,6 +92,7 @@ CREATE TABLE IF NOT EXISTS events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_participant ON sessions(participant_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id);
 """
 

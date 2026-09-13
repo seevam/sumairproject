@@ -126,3 +126,86 @@ def test_participant_withdrawal_removes_everything(client):
     assert client.delete("/api/participant/P-TEST").get_json()["deleted_sessions"] == 1
     assert client.get("/api/sessions").get_json()["sessions"] == []
     assert "posture_alert" not in client.get("/api/events/export").get_data(as_text=True)
+
+
+# --- guest-first auth -------------------------------------------------------
+#
+# PostureGuard must keep working for anonymous clients, so the default mode is
+# "disabled": no Clerk key, anonymous sync accepted. These tests pin that
+# behaviour down so it cannot regress into an auth wall.
+
+
+def test_auth_defaults_to_disabled(client):
+    assert client.get("/api/health").get_json()["auth"] == "disabled"
+
+
+def test_guest_sync_is_accepted_without_a_token(client):
+    assert client.post("/api/session/sync", json=session_payload()).status_code == 200
+
+
+def test_guest_session_is_stored_with_no_owner(client):
+    client.post("/api/session/sync", json=session_payload())
+    assert client.get("/api/sessions").get_json()["sessions"][0]["user_id"] is None
+
+
+def test_required_mode_rejects_an_anonymous_request(monkeypatch, client):
+    """With CLERK_REQUIRE_AUTH set, a guest sync must be refused rather than stored."""
+    import auth as clerk_auth
+
+    monkeypatch.setattr(clerk_auth, "mode", lambda: "required")
+    r = client.post("/api/session/sync", json=session_payload())
+    assert r.status_code == 401
+    assert client.get("/api/sessions").get_json()["sessions"] == []
+
+
+def test_signed_in_user_sees_only_their_own_sessions(monkeypatch, client):
+    import auth as clerk_auth
+
+    def as_user(user_id):
+        monkeypatch.setattr(
+            clerk_auth, "identify",
+            lambda _req, uid=user_id: clerk_auth.Identity(user_id=uid, authenticated=True),
+        )
+
+    as_user("user_alice")
+    client.post("/api/session/sync", json=session_payload(id="s_alice"))
+
+    as_user("user_bob")
+    client.post("/api/session/sync", json=session_payload(id="s_bob"))
+
+    sessions = client.get("/api/sessions").get_json()["sessions"]
+    assert [s["id"] for s in sessions] == ["s_bob"]
+
+    as_user("user_alice")
+    sessions = client.get("/api/sessions").get_json()["sessions"]
+    assert [s["id"] for s in sessions] == ["s_alice"]
+
+
+def test_resync_does_not_strip_an_existing_owner(monkeypatch, client):
+    """A later anonymous retry must not orphan a session that was owned."""
+    import auth as clerk_auth
+
+    monkeypatch.setattr(
+        clerk_auth, "identify",
+        lambda _req: clerk_auth.Identity(user_id="user_alice", authenticated=True),
+    )
+    client.post("/api/session/sync", json=session_payload())
+
+    monkeypatch.setattr(clerk_auth, "identify", lambda _req: clerk_auth.GUEST)
+    client.post("/api/session/sync", json=session_payload(postureAlerts=9))
+
+    monkeypatch.setattr(
+        clerk_auth, "identify",
+        lambda _req: clerk_auth.Identity(user_id="user_alice", authenticated=True),
+    )
+    rows = client.get("/api/sessions").get_json()["sessions"]
+    assert len(rows) == 1
+    assert rows[0]["user_id"] == "user_alice"
+    assert rows[0]["posture_alerts"] == 9
+
+
+def test_identify_returns_guest_when_clerk_is_not_configured():
+    import auth as clerk_auth
+
+    assert clerk_auth.configured() is False
+    assert clerk_auth.identify(object()).is_guest is True

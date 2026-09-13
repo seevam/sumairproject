@@ -2,14 +2,8 @@ import { useEffect, useRef } from 'react'
 import type { RefObject } from 'react'
 import { OVERLAY_EDGES } from '../lib/poseEngine'
 import { LM, type RawLandmark } from '../lib/posture'
+import { POSTURE_COLOR } from '../lib/theme'
 import type { PostureState } from '../types'
-
-const STATE_COLOR: Record<PostureState, string> = {
-  good: '#1DB954',
-  warning: '#F0A500',
-  poor: '#CF222E',
-  absent: '#6E7681',
-}
 
 interface Props {
   videoRef: RefObject<HTMLVideoElement | null>
@@ -45,7 +39,7 @@ export function CameraView({ videoRef, landmarks, postureState, className = '' }
 
     if (!landmarks) return
 
-    const color = STATE_COLOR[postureState]
+    const color = POSTURE_COLOR[postureState]
     const used = new Set<number>(Object.values(LM))
     const px = (p: RawLandmark) => ({ x: p.x * rect.width, y: p.y * rect.height })
 
@@ -95,7 +89,7 @@ export function CameraView({ videoRef, landmarks, postureState, className = '' }
 
   return (
     <div className={`relative overflow-hidden rounded-card border-2 bg-black ${className}`}
-      style={{ borderColor: STATE_COLOR[postureState] }}>
+      style={{ borderColor: POSTURE_COLOR[postureState] }}>
       <video
         ref={videoRef}
         playsInline

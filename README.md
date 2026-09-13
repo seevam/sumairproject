@@ -44,17 +44,61 @@ reaches any threshold.
 
 ---
 
+## Design system
+
+The V1 mockup supersedes the original PRD palette: the background is a
+green-tinted near-black rather than the PRD's navy `#0A1628`.
+
+| Token | Value | Use |
+|---|---|---|
+| `bg` | `#050A07` | Page background |
+| `surface` | `#0B120E` | Cards |
+| `surface-2` | `#111A15` | Inputs, icon tiles, nested rows |
+| `accent` | `#4ADE80` | Primary green |
+| `line` | `#1C2A22` | Borders |
+| `muted` | `#7C8F85` | Secondary text |
+| `warn` / `danger` | `#F0A500` / `#F04438` | Warning and poor posture |
+
+Primary buttons use a vertical green gradient with dark text. Canvas and SVG
+colours live in `src/lib/theme.ts`, which mirrors `tailwind.config.js`.
+
 ## Privacy
 
 This is the core design constraint, not a feature bolted on afterwards.
 
 - **Video never leaves the device.** MediaPipe runs as WebAssembly inside the browser tab. The WASM runtime, the model file and the webfont are all self-hosted, so the app makes **no third-party request at all** — not even for fonts.
 - **No frames are stored.** Landmarks become four numbers and are discarded.
+- **Guest-first.** No account is needed for anything: calibrate, run sessions, and export data without ever entering an email address. Sign-in only adds cross-device sync. In a build with no Clerk key the SDK is never even downloaded.
 - **Local-first storage.** Sessions live in the browser's IndexedDB. Sync is **off by default** — even when the deployment ships a backend, Settings shows a one-click opt-in rather than switching it on for you. With sync off, nothing is transmitted anywhere, ever.
 - **The optional backend refuses landmark data.** `POST /api/session/sync` rejects any payload containing landmark, frame, or image fields — the guarantee is enforced server-side, not just promised client-side.
 - **Visible camera indicator** whenever the stream is live, and one-click deletion of all local data in Settings.
 
 ---
+
+## Authentication
+
+Clerk, wired guest-first. Auth is genuinely optional at every layer:
+
+| Layer | Without Clerk configured | With Clerk configured |
+|---|---|---|
+| Frontend | Guest-only. The Clerk chunk is never requested, so no third-party code loads. | Sign-in and sign-up on `/auth`, with "Continue as Guest" still present. |
+| Backend | `auth=disabled`. Anonymous sync accepted. | `auth=optional` — a token attaches a user id; anonymous still accepted. Set `CLERK_REQUIRE_AUTH=1` for `auth=required`. |
+
+Signed-in users only ever get their own sessions back from `/api/sessions`. A
+guest re-sync never strips an owner off a session that was already claimed.
+
+`GET /api/health` reports the active mode, so you can confirm what a deployment
+is actually doing.
+
+Frontend env: `VITE_CLERK_PUBLISHABLE_KEY`.
+Backend env: `CLERK_SECRET_KEY` and/or `CLERK_JWT_KEY` (the PEM key verifies
+locally with no outbound request per API call), plus optional
+`CLERK_AUTHORIZED_PARTIES` and `CLERK_REQUIRE_AUTH`.
+
+> **Why guest-first matters here.** The pilot studies adolescents. Running
+> participants in guest mode means no minor's email address is stored on a
+> third-party service, and the privacy section of the paper holds without
+> qualification. Sign-in exists for the demo and for anyone who wants sync.
 
 ## Repository layout
 
@@ -104,8 +148,8 @@ or create `frontend/.env` with `VITE_API_BASE_URL=http://localhost:5000`.
 ## Tests
 
 ```bash
-cd frontend && npm test              # 65 unit tests: posture maths, CSV, sync, session engine
-cd backend  && python -m pytest -q   # 12 API tests (SQLite)
+cd frontend && npm test              # 69 unit tests: posture maths, CSV, sync, session engine
+cd backend  && python -m pytest -q   # 19 API tests (SQLite)
 
 # The backend suite must also pass against Postgres, which is what production uses:
 cd backend && DATABASE_URL=postgresql://... python -m pytest -q
@@ -254,9 +298,8 @@ absence, snooze 5 min once per break.
 
 Deferred by scope decision, listed here so the gap is explicit:
 
-- Email/password accounts and the 4-step onboarding walkthrough — settings and calibration currently cover their function, and data is per-device
-- Guest vs. signed-in distinction (everything is local, so every user is effectively a guest)
 - Flask-SocketIO real-time channel — timers run client-side, which removes a failure mode rather than adding one
+- Cross-device sync of calibration baselines (sessions sync; the baseline stays local)
 - Mobile app, Raspberry Pi device, Apple Health / Google Fit — V2 and beyond
 
 ---

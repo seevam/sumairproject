@@ -5,3 +5,7 @@ gunicorn==22.0.0
 # Only used when DATABASE_URL points at Postgres. Required for any serverless
 # deployment (Vercel), where the filesystem is ephemeral and SQLite cannot persist.
 psycopg[binary]==3.3.5
+
+# Optional: only needed when CLERK_SECRET_KEY / CLERK_JWT_KEY are set. The API
+# runs guest-first without it.
+clerk-backend-api==3.0.3

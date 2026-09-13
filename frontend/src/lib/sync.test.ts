@@ -8,7 +8,7 @@ vi.mock('./db', () => ({
   listEvents: vi.fn(async () => []),
 }))
 
-import { SAME_ORIGIN, detectSameOriginBackend, syncEnabled } from './sync'
+import { SAME_ORIGIN, detectSameOriginBackend, setAuthTokenProvider, syncEnabled } from './sync'
 
 /** The sync layer reads the persisted settings blob directly, so shape it here. */
 function setApiBaseUrl(value: string | undefined) {
@@ -21,6 +21,7 @@ function setApiBaseUrl(value: string | undefined) {
 
 beforeEach(() => {
   localStorage.clear()
+  setAuthTokenProvider(null)
   vi.restoreAllMocks()
 })
 
@@ -116,5 +117,46 @@ describe('detectSameOriginBackend', () => {
   it('reports false when the request fails outright', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('network down') }))
     expect(await detectSameOriginBackend()).toBe(false)
+  })
+})
+
+describe('auth headers', () => {
+  /** Capture the headers the sync layer would actually send. */
+  async function headersFor(): Promise<Record<string, string>> {
+    setApiBaseUrl(SAME_ORIGIN)
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
+      new Response('{}', { status: 200 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { queueSync } = await import('./sync')
+    queueSync({
+      id: 's1', participantId: 'P', startTime: 1, endTime: 2, durationSeconds: 1,
+      mode: 'study', avgDeviationPct: 0, deviationSamples: 0, postureAlerts: 0,
+      breaksPrompted: 0, breaksTaken: 0, breaksSnoozed: 0, sittingSeconds: 0, synced: false,
+    })
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled())
+    return (fetchMock.mock.calls[0]![1] as RequestInit).headers as Record<string, string>
+  }
+
+  it('sends no Authorization header for a guest', async () => {
+    expect(await headersFor()).not.toHaveProperty('Authorization')
+  })
+
+  it('sends a bearer token once a provider is registered', async () => {
+    setAuthTokenProvider(async () => 'tok_123')
+    expect((await headersFor()).Authorization).toBe('Bearer tok_123')
+  })
+
+  it('falls back to anonymous when the provider returns null', async () => {
+    setAuthTokenProvider(async () => null)
+    expect(await headersFor()).not.toHaveProperty('Authorization')
+  })
+
+  it('still syncs when the token provider throws', async () => {
+    setAuthTokenProvider(async () => { throw new Error('clerk down') })
+    const headers = await headersFor()
+    expect(headers).not.toHaveProperty('Authorization')
+    expect(headers['Content-Type']).toBe('application/json')
   })
 })

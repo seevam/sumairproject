@@ -52,6 +52,28 @@ export function syncEnabled(): boolean {
 }
 
 /**
+ * Supplies a bearer token for sync requests.
+ *
+ * Registered by the app at startup when auth is available. Guest builds never
+ * set it, so sync stays anonymous and no Clerk code is involved.
+ */
+let tokenProvider: (() => Promise<string | null>) | null = null
+
+export function setAuthTokenProvider(provider: (() => Promise<string | null>) | null): void {
+  tokenProvider = provider
+}
+
+async function authHeaders(): Promise<Record<string, string>> {
+  if (!tokenProvider) return {}
+  try {
+    const token = await tokenProvider()
+    return token ? { Authorization: `Bearer ${token}` } : {}
+  } catch {
+    return {}
+  }
+}
+
+/**
  * Probe for a backend on this origin. Used by Settings to offer one-click
  * enabling when the deployment includes the Python service, rather than
  * silently switching sync on for everyone.
@@ -76,7 +98,7 @@ async function postSession(record: SessionRecord): Promise<boolean> {
     const events = await listEvents(record.id)
     const res = await fetch(`${url}/api/session/sync`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
       body: JSON.stringify({ session: record, events }),
       signal: AbortSignal.timeout(10_000),
     })

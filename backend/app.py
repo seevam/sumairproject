@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 from flask import Flask, Response, g, jsonify, request
 from flask_cors import CORS
 
+import auth as clerk_auth
 import db as store
 
 SESSION_CSV_HEADER = [
@@ -71,6 +72,7 @@ def create_app() -> Flask:
         return jsonify(
             status="ok",
             storage=store.describe(),
+            auth=clerk_auth.mode(),
             time=datetime.now(timezone.utc).isoformat(),
         )
 
@@ -86,6 +88,10 @@ def create_app() -> Flask:
         session = payload.get("session")
         events = payload.get("events") or []
 
+        identity = clerk_auth.identify(request)
+        if clerk_auth.mode() == "required" and identity.is_guest:
+            return jsonify(error="authentication required"), 401
+
         if not isinstance(session, dict) or not session.get("id"):
             return jsonify(error="session with an id is required"), 400
 
@@ -98,11 +104,12 @@ def create_app() -> Flask:
         db.execute(
             """
             INSERT INTO sessions (
-                id, participant_id, start_time, end_time, duration_seconds,
+                id, participant_id, user_id, start_time, end_time, duration_seconds,
                 sitting_seconds, mode, avg_deviation_pct, posture_alerts,
                 breaks_prompted, breaks_taken, breaks_snoozed, received_at
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET
+                user_id           = COALESCE(excluded.user_id, sessions.user_id),
                 end_time          = excluded.end_time,
                 duration_seconds  = excluded.duration_seconds,
                 sitting_seconds   = excluded.sitting_seconds,
@@ -116,6 +123,7 @@ def create_app() -> Flask:
             (
                 session["id"],
                 str(session.get("participantId", "unknown"))[:64],
+                identity.user_id,
                 int(session.get("startTime") or 0),
                 int(session["endTime"]) if session.get("endTime") else None,
                 int(session.get("durationSeconds") or 0),
@@ -153,9 +161,15 @@ def create_app() -> Flask:
 
     @app.get("/api/sessions")
     def list_sessions():
+        identity = clerk_auth.identify(request)
         participant = request.args.get("participant_id")
+
         sql = "SELECT * FROM sessions WHERE end_time IS NOT NULL"
         params: list = []
+        if identity.authenticated:
+            # A signed-in user gets their own data back, never anyone else's.
+            sql += " AND user_id = ?"
+            params.append(identity.user_id)
         if participant:
             sql += " AND participant_id = ?"
             params.append(participant)
