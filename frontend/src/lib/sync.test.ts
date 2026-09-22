@@ -68,7 +68,8 @@ describe('request targets', () => {
 
     const { queueSync } = await import('./sync')
     queueSync({
-      id: 's1', participantId: 'P', startTime: 1, endTime: 2, durationSeconds: 1,
+      id: 's1', participantId: 'P', age: null, behaviorType: null, activityType: null,
+      startTime: 1, endTime: 2, durationSeconds: 1,
       mode: 'study', avgDeviationPct: 0, deviationSamples: 0, postureAlerts: 0,
       breaksPrompted: 0, breaksTaken: 0, breaksSnoozed: 0, sittingSeconds: 0, synced: false,
     })
@@ -131,7 +132,8 @@ describe('auth headers', () => {
 
     const { queueSync } = await import('./sync')
     queueSync({
-      id: 's1', participantId: 'P', startTime: 1, endTime: 2, durationSeconds: 1,
+      id: 's1', participantId: 'P', age: null, behaviorType: null, activityType: null,
+      startTime: 1, endTime: 2, durationSeconds: 1,
       mode: 'study', avgDeviationPct: 0, deviationSamples: 0, postureAlerts: 0,
       breaksPrompted: 0, breaksTaken: 0, breaksSnoozed: 0, sittingSeconds: 0, synced: false,
     })

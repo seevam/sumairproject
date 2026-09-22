@@ -3,10 +3,13 @@ import {
   DeviationSmoother,
   computeDeviation,
   computeMetrics,
+  defaultBaseline,
   landmarksVisible,
+  medianMetrics,
   thresholdFor,
   type RawLandmark,
 } from './posture'
+import type { PostureMetrics } from '../types'
 
 /** A full 33-landmark array with only the points PostureGuard uses set meaningfully. */
 function pose(nose: [number, number], ls: [number, number], rs: [number, number]): RawLandmark[] {
@@ -116,5 +119,65 @@ describe('DeviationSmoother', () => {
     s.push(90)
     // One bad frame must not be enough to cross the warning threshold.
     expect(s.current).toBeLessThan(thresholdFor('medium').warning)
+  })
+})
+
+describe('medianMetrics', () => {
+  const sample = (neckRatio: number, neckAngleDeg = 0): PostureMetrics => ({
+    neckAngleDeg,
+    neckRatio,
+    shoulderWidth: 0.34,
+    shoulderTiltDeg: 0,
+  })
+
+  it('returns the middle value of an odd-length run', () => {
+    expect(medianMetrics([sample(0.5), sample(0.6), sample(0.7)]).neckRatio).toBeCloseTo(0.6)
+  })
+
+  it('averages the two middle values of an even-length run', () => {
+    expect(medianMetrics([sample(0.5), sample(0.6), sample(0.7), sample(0.8)]).neckRatio).toBeCloseTo(0.65)
+  })
+
+  it('discards the bad frames MediaPipe emits mid-capture', () => {
+    // Nine good frames and two wild ones, as a real 10s capture looks.
+    const frames = [
+      ...Array.from({ length: 9 }, () => sample(0.62)),
+      sample(0.05),
+      sample(1.9),
+    ]
+    expect(medianMetrics(frames).neckRatio).toBeCloseTo(0.62)
+  })
+
+  it('handles a single frame', () => {
+    expect(medianMetrics([sample(0.62)]).neckRatio).toBeCloseTo(0.62)
+  })
+
+  it('refuses an empty capture rather than inventing a baseline', () => {
+    expect(() => medianMetrics([])).toThrow()
+  })
+})
+
+describe('defaultBaseline', () => {
+  it('uses the adult ratio when age is unknown', () => {
+    expect(defaultBaseline().metrics.neckRatio).toBeCloseTo(0.62)
+    expect(defaultBaseline(null).metrics.neckRatio).toBeCloseTo(0.62)
+  })
+
+  it('is marked as a fallback so the UI can say so', () => {
+    expect(defaultBaseline(16).isDefault).toBe(true)
+  })
+
+  it('expects a proportionally higher head position for younger users', () => {
+    expect(defaultBaseline(11).metrics.neckRatio).toBeGreaterThan(defaultBaseline(16).metrics.neckRatio)
+    expect(defaultBaseline(16).metrics.neckRatio).toBeGreaterThan(defaultBaseline(25).metrics.neckRatio)
+  })
+
+  it('does not extrapolate beyond the modelled range', () => {
+    expect(defaultBaseline(4).metrics.neckRatio).toBeCloseTo(defaultBaseline(10).metrics.neckRatio)
+    expect(defaultBaseline(70).metrics.neckRatio).toBeCloseTo(defaultBaseline(18).metrics.neckRatio)
+  })
+
+  it('ignores a nonsensical age rather than producing NaN', () => {
+    expect(Number.isFinite(defaultBaseline(Number.NaN).metrics.neckRatio)).toBe(true)
   })
 })

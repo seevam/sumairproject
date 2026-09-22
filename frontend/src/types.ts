@@ -6,6 +6,35 @@ export type Sensitivity = 'low' | 'medium' | 'high'
 export type NotificationStyle = 'visual' | 'audio' | 'desktop'
 export type ActivityType = 'studying' | 'gaming' | 'working'
 
+/**
+ * Stable persona, as opposed to ActivityType which is what the user is doing in
+ * a given session. Behaviour type picks the default mode and is reported as a
+ * grouping variable in the pilot analysis; activity can change session to
+ * session without changing who the participant is.
+ */
+export type BehaviorType = 'student' | 'gamer' | 'worker'
+
+export interface UserProfile {
+  /** Whole years. Null until the user supplies it. */
+  age: number | null
+  behaviorType: BehaviorType | null
+  preferredActivity: ActivityType | null
+}
+
+/**
+ * Everything that differs between Study and Entertainment mode.
+ *
+ * Each mode keeps its own copy, so switching modes restores that mode's
+ * configuration rather than carrying the other one's settings across.
+ */
+export interface ModeSettings {
+  breakIntervalMin: number
+  sensitivity: Sensitivity
+  notificationStyles: NotificationStyle[]
+  /** Seconds of sustained deviation before a posture alert fires. */
+  postureAlertSeconds: number
+}
+
 /** A single frame's worth of the landmarks we actually use (normalised 0..1). */
 export interface PosturePoint {
   x: number
@@ -59,6 +88,10 @@ export interface SessionEvent {
 export interface SessionRecord {
   id: string
   participantId: string
+  /** Profile snapshot at the time of the session, for the research dataset. */
+  age: number | null
+  behaviorType: BehaviorType | null
+  activityType: ActivityType | null
   startTime: number
   endTime: number | null
   durationSeconds: number
@@ -76,11 +109,11 @@ export interface SessionRecord {
 }
 
 export interface Settings {
+  /** Which mode is currently active. */
   mode: Mode
-  activityType: ActivityType
-  breakIntervalMin: number
-  sensitivity: Sensitivity
-  notificationStyles: NotificationStyle[]
+  /** Per-mode configuration, kept independently. */
+  modes: Record<Mode, ModeSettings>
+  profile: UserProfile
   showCameraIndicator: boolean
   participantId: string
   apiBaseUrl: string

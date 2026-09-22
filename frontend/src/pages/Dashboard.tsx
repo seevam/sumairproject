@@ -9,13 +9,14 @@ import { loadCalibration } from '../lib/db'
 import { hhmmss, mmss } from '../lib/time'
 import { requestNotificationPermission, unlockAudio, notificationPermission } from '../lib/notify'
 import { ABSENCE_GRACE_SECONDS, useSession } from '../store/session'
-import { MODE_PRESETS, useSettings } from '../store/settings'
+import { MODE_META, useSettings } from '../store/settings'
 import type { CalibrationBaseline, Mode } from '../types'
 
 export function Dashboard() {
   const navigate = useNavigate()
   const session = useSession()
   const settings = useSettings()
+  const modeSettings = settings.active()
   const [baseline, setBaseline] = useState<CalibrationBaseline | null>(null)
   const [baselineLoaded, setBaselineLoaded] = useState(false)
   const [notifPerm, setNotifPerm] = useState(notificationPermission())
@@ -52,7 +53,7 @@ export function Dashboard() {
   async function handleStart() {
     // Both of these need a user gesture, so they have to happen in this handler.
     await unlockAudio()
-    if (settings.notificationStyles.includes('desktop')) {
+    if (modeSettings.notificationStyles.includes('desktop')) {
       setNotifPerm(await requestNotificationPermission())
     }
     await session.start()
@@ -63,7 +64,7 @@ export function Dashboard() {
     navigate(id ? `/session/summary?id=${id}` : '/data')
   }
 
-  const intervalSeconds = settings.breakIntervalMin * 60
+  const intervalSeconds = modeSettings.breakIntervalMin * 60
   const untilBreak = Math.max(0, intervalSeconds - session.sittingSeconds)
   const absent = session.absentSeconds >= ABSENCE_GRACE_SECONDS
 
@@ -90,7 +91,7 @@ export function Dashboard() {
             {monitoring
               ? absent
                 ? 'Timer paused - you are not in frame.'
-                : `${MODE_PRESETS[settings.mode].label} Mode - break every ${settings.breakIntervalMin} min.`
+                : `${MODE_META[settings.mode].label} Mode - break every ${modeSettings.breakIntervalMin} min.`
               : 'Start a session to begin monitoring posture and sitting time.'}
           </p>
         </div>
@@ -131,7 +132,7 @@ export function Dashboard() {
               <button className="btn-primary" onClick={handleStart}>Start session</button>
             )}
 
-            <ModeToggle mode={settings.mode} onChange={settings.setMode} disabled={session.phase === 'break'} />
+            <ModeToggle disabled={session.phase === 'break'} />
           </div>
 
           {monitoring && frame.fps > 0 && (
@@ -152,7 +153,7 @@ export function Dashboard() {
             <StatCard
               label="Next break in"
               value={monitoring ? mmss(untilBreak) : '--:--'}
-              hint={session.snoozeSecondsRemaining > 0 ? `snoozed ${mmss(session.snoozeSecondsRemaining)}` : `every ${settings.breakIntervalMin} min`}
+              hint={session.snoozeSecondsRemaining > 0 ? `snoozed ${mmss(session.snoozeSecondsRemaining)}` : `every ${modeSettings.breakIntervalMin} min`}
               tone={untilBreak < 120 && monitoring ? 'warn' : 'default'}
             />
             <StatCard
@@ -171,17 +172,17 @@ export function Dashboard() {
 
           <div className="card space-y-2 p-4">
             <p className="label">Current deviation</p>
-            <DeviationMeter value={monitoring ? session.deviationPct : 0} sensitivity={settings.sensitivity} />
+            <DeviationMeter value={monitoring ? session.deviationPct : 0} sensitivity={modeSettings.sensitivity} />
             <p className="text-xs leading-relaxed text-muted">
               {monitoring
                 ? session.sustainedSeconds > 0
-                  ? `Above threshold for ${Math.round(session.sustainedSeconds)}s. An alert fires at ${MODE_PRESETS[settings.mode].postureAlertSeconds}s.`
+                  ? `Above threshold for ${Math.round(session.sustainedSeconds)}s. An alert fires at ${modeSettings.postureAlertSeconds}s.`
                   : 'Measured against your calibrated baseline.'
                 : 'Starts measuring when a session begins.'}
             </p>
           </div>
 
-          {settings.notificationStyles.includes('desktop') && notifPerm === 'denied' && (
+          {modeSettings.notificationStyles.includes('desktop') && notifPerm === 'denied' && (
             <p className="card border-warn/40 p-3 text-xs text-warn">
               Desktop notifications are blocked for this site. In-app and audio alerts still work.
             </p>
@@ -192,25 +193,33 @@ export function Dashboard() {
   )
 }
 
-function ModeToggle({ mode, onChange, disabled }: { mode: Mode; onChange: (m: Mode) => void; disabled?: boolean }) {
+function ModeToggle({ disabled }: { disabled?: boolean }) {
+  const settings = useSettings()
+  const mode = settings.mode
+
   return (
     <div className="space-y-1.5">
       <div className="inline-flex rounded-btn border border-line p-1" role="group" aria-label="Alert mode">
-        {(Object.keys(MODE_PRESETS) as Mode[]).map((m) => (
+        {(Object.keys(MODE_META) as Mode[]).map((m) => (
           <button
             key={m}
             disabled={disabled}
-            onClick={() => onChange(m)}
-            title={MODE_PRESETS[m].blurb}
+            onClick={() => settings.setMode(m)}
+            aria-pressed={mode === m}
+            title={MODE_META[m].blurb}
             className={`rounded-[5px] px-3 py-1.5 text-sm font-medium transition-colors disabled:opacity-40 ${
               mode === m ? 'bg-accent text-[#04140A]' : 'text-muted hover:text-white'
             }`}
           >
-            {MODE_PRESETS[m].label}
+            {MODE_META[m].label}
           </button>
         ))}
       </div>
-      <p className="max-w-xs text-xs text-muted">{MODE_PRESETS[mode].blurb}</p>
+      {/* Switching restores this mode's own saved settings, so show them. */}
+      <p className="max-w-xs tabular text-xs text-muted">
+        {settings.modes[mode].breakIntervalMin} min breaks - {settings.modes[mode].sensitivity} sensitivity -
+        alert after {settings.modes[mode].postureAlertSeconds}s
+      </p>
     </div>
   )
 }

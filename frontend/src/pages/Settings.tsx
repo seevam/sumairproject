@@ -2,17 +2,18 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { clearCalibration, deleteAllData, loadCalibration } from '../lib/db'
 import { requestNotificationPermission, notificationPermission } from '../lib/notify'
-import { MODE_PRESETS, useSettings } from '../store/settings'
+import { BEHAVIOR_DEFAULT_MODE, MODE_META, useSettings } from '../store/settings'
 import { SAME_ORIGIN, detectSameOriginBackend } from '../lib/sync'
 import { useSession } from '../store/session'
 import { shortDate, shortTime } from '../lib/time'
-import type { ActivityType, CalibrationBaseline, Mode, NotificationStyle, Sensitivity } from '../types'
-
-const SENSITIVITY_HELP: Record<Sensitivity, string> = {
-  low: 'Alerts only on obvious slouching (22% deviation).',
-  medium: 'The PRD default (15% deviation).',
-  high: 'Catches small drifts early (10% deviation). More alerts.',
-}
+import type {
+  ActivityType,
+  BehaviorType,
+  CalibrationBaseline,
+  Mode,
+  NotificationStyle,
+  Sensitivity,
+} from '../types'
 
 export function Settings() {
   const navigate = useNavigate()
@@ -32,16 +33,16 @@ export function Settings() {
 
   const sessionRunning = phase !== 'idle' && phase !== 'ended'
 
-  async function toggleStyle(style: NotificationStyle) {
-    const has = settings.notificationStyles.includes(style)
+  async function toggleStyle(mode: Mode, style: NotificationStyle) {
+    const current = settings.modes[mode].notificationStyles
+    const has = current.includes(style)
     if (!has && style === 'desktop') {
       setNotifPerm(await requestNotificationPermission())
     }
-    settings.update({
-      notificationStyles: has
-        ? settings.notificationStyles.filter((s) => s !== style)
-        : [...settings.notificationStyles, style],
-    })
+    settings.updateMode(
+      { notificationStyles: has ? current.filter((s) => s !== style) : [...current, style] },
+      mode,
+    )
   }
 
   async function handleDeleteAll() {
@@ -61,94 +62,105 @@ export function Settings() {
         </p>
       )}
 
-      <Section title="Mode" hint="Sets both the break interval and how long slouching is tolerated.">
-        <div className="grid gap-2 sm:grid-cols-2">
-          {(Object.keys(MODE_PRESETS) as Mode[]).map((m) => (
+      <Section
+        title="Modes"
+        hint="Each mode keeps its own settings. Switching modes loads that mode's configuration."
+      >
+        <div className="flex gap-2" role="group" aria-label="Active mode">
+          {(Object.keys(MODE_META) as Mode[]).map((m) => (
             <button
               key={m}
               onClick={() => settings.setMode(m)}
-              className={`rounded-btn border p-3 text-left transition-colors ${
+              aria-pressed={settings.mode === m}
+              className={`flex-1 rounded-btn border p-3 text-left transition-colors ${
                 settings.mode === m ? 'border-accent bg-accent/10' : 'border-line hover:border-white/30'
               }`}
             >
-              <p className="text-sm font-semibold">{MODE_PRESETS[m].label} Mode</p>
-              <p className="mt-0.5 text-xs text-muted">{MODE_PRESETS[m].blurb}</p>
+              <p className="text-sm font-semibold">
+                {MODE_META[m].label} Mode
+                {settings.mode === m && <span className="ml-2 text-xs font-normal text-accent">active</span>}
+              </p>
+              <p className="mt-0.5 text-xs tabular text-muted">
+                {settings.modes[m].breakIntervalMin} min breaks - {settings.modes[m].sensitivity} sensitivity
+              </p>
             </button>
           ))}
         </div>
+        <p className="text-xs leading-relaxed text-muted">{MODE_META[settings.mode].blurb}</p>
       </Section>
 
-      <Section title="Break interval" hint="Overrides the mode default if you want a different pace.">
-        <div className="flex gap-2">
-          {[30, 45, 60].map((min) => (
-            <button
-              key={min}
-              onClick={() => settings.update({ breakIntervalMin: min })}
-              className={`flex-1 rounded-btn border py-2.5 text-sm font-medium transition-colors ${
-                settings.breakIntervalMin === min ? 'border-accent bg-accent/10 text-accent' : 'border-line text-muted hover:text-white'
-              }`}
-            >
-              {min} min
-            </button>
-          ))}
-        </div>
-      </Section>
+      {(Object.keys(MODE_META) as Mode[]).map((m) => (
+        <ModeEditor
+          key={m}
+          mode={m}
+          isActive={settings.mode === m}
+          notifPerm={notifPerm}
+          onToggleStyle={(style) => void toggleStyle(m, style)}
+        />
+      ))}
 
-      <Section title="Posture sensitivity" hint={SENSITIVITY_HELP[settings.sensitivity]}>
-        <div className="flex gap-2">
-          {(['low', 'medium', 'high'] as Sensitivity[]).map((s) => (
-            <button
-              key={s}
-              onClick={() => settings.update({ sensitivity: s })}
-              className={`flex-1 rounded-btn border py-2.5 text-sm font-medium capitalize transition-colors ${
-                settings.sensitivity === s ? 'border-accent bg-accent/10 text-accent' : 'border-line text-muted hover:text-white'
-              }`}
-            >
-              {s}
-            </button>
-          ))}
-        </div>
-      </Section>
+      <Section title="About you" hint="Used to group results in the study, and to pick sensible defaults.">
+        <div className="space-y-3">
+          <div>
+            <label className="label" htmlFor="age">Age</label>
+            <input
+              id="age"
+              type="number"
+              inputMode="numeric"
+              min={5}
+              max={120}
+              className="input mt-1"
+              placeholder="e.g. 16"
+              value={settings.profile.age ?? ''}
+              onChange={(e) => {
+                const n = Number(e.target.value)
+                settings.setProfile({ age: e.target.value === '' || Number.isNaN(n) ? null : n })
+              }}
+            />
+          </div>
 
-      <Section title="Alert channels" hint="Visual alerts are always on while the dashboard is open.">
-        <div className="space-y-2">
-          {([
-            { key: 'visual', label: 'In-app badge', detail: 'Posture pill turns amber, then red.' },
-            { key: 'audio', label: 'Audio cue', detail: 'Short chime. Quieter in Study Mode.' },
-            { key: 'desktop', label: 'Desktop notification', detail: 'Reaches you if the window is minimised.' },
-          ] as Array<{ key: NotificationStyle; label: string; detail: string }>).map((opt) => (
-            <label key={opt.key} className="flex cursor-pointer items-start gap-3 rounded-btn border border-line p-3">
-              <input
-                type="checkbox"
-                className="mt-0.5 h-4 w-4 accent-[#4ADE80]"
-                checked={settings.notificationStyles.includes(opt.key)}
-                onChange={() => void toggleStyle(opt.key)}
-              />
-              <span className="flex-1">
-                <span className="block text-sm font-medium">{opt.label}</span>
-                <span className="block text-xs text-muted">{opt.detail}</span>
-                {opt.key === 'desktop' && notifPerm === 'denied' && (
-                  <span className="mt-1 block text-xs text-danger">Blocked in browser site settings.</span>
-                )}
-              </span>
-            </label>
-          ))}
-        </div>
-      </Section>
+          <div>
+            <span className="label">Behaviour type</span>
+            <div className="mt-1 flex gap-2">
+              {(['student', 'gamer', 'worker'] as BehaviorType[]).map((b) => (
+                <button
+                  key={b}
+                  onClick={() => settings.applyBehaviorType(b)}
+                  className={`flex-1 rounded-btn border py-2.5 text-sm font-medium capitalize transition-colors ${
+                    settings.profile.behaviorType === b
+                      ? 'border-accent bg-accent/10 text-accent'
+                      : 'border-line text-muted hover:text-white'
+                  }`}
+                >
+                  {b}
+                </button>
+              ))}
+            </div>
+            {settings.profile.behaviorType && (
+              <p className="mt-1 text-xs text-muted">
+                Starts you in {MODE_META[BEHAVIOR_DEFAULT_MODE[settings.profile.behaviorType]].label} Mode.
+              </p>
+            )}
+          </div>
 
-      <Section title="Activity type" hint="Recorded with your sessions for the study.">
-        <div className="flex gap-2">
-          {(['studying', 'gaming', 'working'] as ActivityType[]).map((a) => (
-            <button
-              key={a}
-              onClick={() => settings.update({ activityType: a })}
-              className={`flex-1 rounded-btn border py-2.5 text-sm font-medium capitalize transition-colors ${
-                settings.activityType === a ? 'border-accent bg-accent/10 text-accent' : 'border-line text-muted hover:text-white'
-              }`}
-            >
-              {a}
-            </button>
-          ))}
+          <div>
+            <span className="label">Preferred activity</span>
+            <div className="mt-1 flex gap-2">
+              {(['studying', 'gaming', 'working'] as ActivityType[]).map((a) => (
+                <button
+                  key={a}
+                  onClick={() => settings.setProfile({ preferredActivity: a })}
+                  className={`flex-1 rounded-btn border py-2.5 text-sm font-medium capitalize transition-colors ${
+                    settings.profile.preferredActivity === a
+                      ? 'border-accent bg-accent/10 text-accent'
+                      : 'border-line text-muted hover:text-white'
+                  }`}
+                >
+                  {a}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
       </Section>
 
@@ -264,5 +276,130 @@ function Section({ title, hint, children }: { title: string; hint?: string; chil
       </div>
       {children}
     </section>
+  )
+}
+
+const SENSITIVITY_LABEL: Record<Sensitivity, string> = {
+  low: 'Low - only obvious slouching (22%)',
+  medium: 'Medium - the PRD default (15%)',
+  high: 'High - catches small drifts early (10%)',
+}
+
+const DWELL_OPTIONS = [45, 60, 90, 120]
+
+/**
+ * Editor for one mode's saved configuration. Both modes are shown at once so
+ * the user can set each up in a single visit and then simply toggle between
+ * them, rather than having to switch mode before editing it.
+ */
+function ModeEditor({
+  mode,
+  isActive,
+  notifPerm,
+  onToggleStyle,
+}: {
+  mode: Mode
+  isActive: boolean
+  notifPerm: NotificationPermission | 'unsupported'
+  onToggleStyle: (style: NotificationStyle) => void
+}) {
+  const settings = useSettings()
+  const cfg = settings.modes[mode]
+
+  return (
+    <Section
+      title={`${MODE_META[mode].label} Mode settings`}
+      hint={isActive ? 'Currently active.' : 'Saved - applied when you switch to this mode.'}
+    >
+      <div className="space-y-4">
+        <div>
+          <span className="label">Break interval</span>
+          <div className="mt-1 flex gap-2">
+            {[30, 45, 60].map((min) => (
+              <button
+                key={min}
+                onClick={() => settings.updateMode({ breakIntervalMin: min }, mode)}
+                className={`flex-1 rounded-btn border py-2.5 text-sm font-medium transition-colors ${
+                  cfg.breakIntervalMin === min
+                    ? 'border-accent bg-accent/10 text-accent'
+                    : 'border-line text-muted hover:text-white'
+                }`}
+              >
+                {min} min
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <span className="label">Posture sensitivity</span>
+          <div className="mt-1 flex gap-2">
+            {(['low', 'medium', 'high'] as Sensitivity[]).map((sv) => (
+              <button
+                key={sv}
+                onClick={() => settings.updateMode({ sensitivity: sv }, mode)}
+                className={`flex-1 rounded-btn border py-2.5 text-sm font-medium capitalize transition-colors ${
+                  cfg.sensitivity === sv
+                    ? 'border-accent bg-accent/10 text-accent'
+                    : 'border-line text-muted hover:text-white'
+                }`}
+              >
+                {sv}
+              </button>
+            ))}
+          </div>
+          <p className="mt-1 text-xs text-muted">{SENSITIVITY_LABEL[cfg.sensitivity]}</p>
+        </div>
+
+        <div>
+          <span className="label">Alert after slouching for</span>
+          <div className="mt-1 flex gap-2">
+            {DWELL_OPTIONS.map((secs) => (
+              <button
+                key={secs}
+                onClick={() => settings.updateMode({ postureAlertSeconds: secs }, mode)}
+                className={`flex-1 rounded-btn border py-2.5 text-sm font-medium transition-colors ${
+                  cfg.postureAlertSeconds === secs
+                    ? 'border-accent bg-accent/10 text-accent'
+                    : 'border-line text-muted hover:text-white'
+                }`}
+              >
+                {secs}s
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <span className="label">Alert channels</span>
+          <div className="mt-1 space-y-2">
+            {([
+              { key: 'visual', label: 'In-app badge', detail: 'Posture pill turns amber, then red.' },
+              { key: 'audio', label: 'Audio cue', detail: 'Short chime. Quieter in Study Mode.' },
+              { key: 'desktop', label: 'Desktop notification', detail: 'Reaches you if the window is minimised.' },
+            ] as Array<{ key: NotificationStyle; label: string; detail: string }>).map((opt) => (
+              <label
+                key={opt.key}
+                className="flex cursor-pointer items-start gap-3 rounded-btn border border-line p-3"
+              >
+                <input
+                  type="checkbox"
+                  className="mt-0.5 h-4 w-4 accent-[#4ADE80]"
+                  checked={cfg.notificationStyles.includes(opt.key)}
+                  onChange={() => onToggleStyle(opt.key)}
+                />
+                <span className="flex-1">
+                  <span className="block text-sm font-medium">{opt.label}</span>
+                  <span className="block text-xs text-muted">{opt.detail}</span>
+                  {opt.key === 'desktop' && notifPerm === 'denied' && (
+                    <span className="mt-1 block text-xs text-danger">Blocked in browser site settings.</span>
+                  )}
+                </span>
+              </label>
+            ))}
+          </div>
+        </div>
+      </div>
+    </Section>
   )
 }

@@ -80,18 +80,60 @@ export function extractLandmarkMap(landmarks: RawLandmark[]): Record<string, Pos
  * Values are the average seated-upright ratios measured from a laptop camera at
  * desk height: head roughly centred over the shoulders, nose about 0.62 shoulder
  * widths above the shoulder line.
+ *
+ * Age nudges the neck ratio because head size relative to shoulder breadth
+ * decreases through adolescence, so a younger participant's nose sits
+ * proportionally further above the shoulder line at the same posture. This is a
+ * coarse anthropometric approximation, not a validated model - it only affects
+ * users who skip calibration, and a real capture replaces it entirely.
  */
-export function defaultBaseline(): CalibrationBaseline {
+const ADULT_NECK_RATIO = 0.62
+const YOUNGEST_NECK_RATIO = 0.67
+const ADULT_AGE = 18
+const YOUNGEST_AGE = 10
+
+export function defaultBaseline(age?: number | null): CalibrationBaseline {
+  let neckRatio = ADULT_NECK_RATIO
+  if (typeof age === 'number' && Number.isFinite(age) && age < ADULT_AGE) {
+    const clamped = Math.max(YOUNGEST_AGE, age)
+    const t = (ADULT_AGE - clamped) / (ADULT_AGE - YOUNGEST_AGE)
+    neckRatio = ADULT_NECK_RATIO + t * (YOUNGEST_NECK_RATIO - ADULT_NECK_RATIO)
+  }
+
   return {
     createdAt: Date.now(),
     isDefault: true,
     metrics: {
       neckAngleDeg: 0,
-      neckRatio: 0.62,
+      neckRatio: Math.round(neckRatio * 1000) / 1000,
       shoulderWidth: 0.34,
       shoulderTiltDeg: 0,
     },
     landmarks: {},
+  }
+}
+
+/**
+ * Collapse a run of captured frames into one baseline.
+ *
+ * Median per component rather than mean: MediaPipe produces a handful of badly
+ * placed landmarks during a 10-second capture (blinks, a shift in the chair),
+ * and a median discards them without needing explicit outlier rejection.
+ */
+export function medianMetrics(samples: PostureMetrics[]): PostureMetrics {
+  if (samples.length === 0) throw new Error('medianMetrics requires at least one sample')
+
+  const median = (values: number[]) => {
+    const sorted = [...values].sort((a, b) => a - b)
+    const mid = Math.floor(sorted.length / 2)
+    return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
+  }
+
+  return {
+    neckAngleDeg: median(samples.map((m) => m.neckAngleDeg)),
+    neckRatio: median(samples.map((m) => m.neckRatio)),
+    shoulderWidth: median(samples.map((m) => m.shoulderWidth)),
+    shoulderTiltDeg: median(samples.map((m) => m.shoulderTiltDeg)),
   }
 }
 

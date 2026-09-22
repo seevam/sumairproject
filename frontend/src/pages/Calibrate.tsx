@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { loadCalibration, saveCalibration } from '../lib/db'
 import { defaultBaseline } from '../lib/posture'
+import { useSettings } from '../store/settings'
 import type { CalibrationBaseline } from '../types'
 import { shortDate, shortTime } from '../lib/time'
 
@@ -13,6 +14,7 @@ const STEPS = [
 
 export function Calibrate() {
   const navigate = useNavigate()
+  const age = useSettings((s) => s.profile.age)
   const [existing, setExisting] = useState<CalibrationBaseline | null>(null)
   const [cameraAvailable, setCameraAvailable] = useState<boolean | null>(null)
 
@@ -37,7 +39,8 @@ export function Calibrate() {
   }, [])
 
   async function useDefault() {
-    await saveCalibration(defaultBaseline())
+    // Age only shapes the fallback model; a real capture overrides it entirely.
+    await saveCalibration(defaultBaseline(age))
     navigate('/dashboard')
   }
 

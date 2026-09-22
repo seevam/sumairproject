@@ -31,6 +31,9 @@ export function complianceRate(session: SessionRecord): number {
  */
 export const SESSION_CSV_HEADER = [
   'participant_id',
+  'age',
+  'behavior_type',
+  'preferred_activity',
   'date',
   'session_start',
   'session_duration_min',
@@ -48,6 +51,9 @@ export function sessionsToCsv(sessions: SessionRecord[]): string {
   for (const s of sessions) {
     rows.push([
       s.participantId,
+      s.age ?? '',
+      s.behaviorType ?? '',
+      s.activityType ?? '',
       isoDate(s.startTime),
       isoTime(s.startTime),
       Math.round((s.durationSeconds / 60) * 10) / 10,

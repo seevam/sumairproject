@@ -4,7 +4,7 @@ import { CameraView } from '../components/CameraView'
 import { CameraIndicator } from '../components/CameraIndicator'
 import { useCamera } from '../hooks/useCamera'
 import { usePoseLoop, type PoseFrame } from '../hooks/usePoseLoop'
-import { extractLandmarkMap } from '../lib/posture'
+import { extractLandmarkMap, medianMetrics } from '../lib/posture'
 import { saveCalibration } from '../lib/db'
 import type { PostureMetrics } from '../types'
 
@@ -91,20 +91,7 @@ export function CalibrateActive() {
       return
     }
 
-    // Median rather than mean: it ignores the handful of bad frames MediaPipe
-    // produces when the user blinks or shifts, without needing outlier rejection.
-    const median = (values: number[]) => {
-      const sorted = [...values].sort((a, b) => a - b)
-      const mid = Math.floor(sorted.length / 2)
-      return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
-    }
-
-    const metrics: PostureMetrics = {
-      neckAngleDeg: median(collected.map((m) => m.neckAngleDeg)),
-      neckRatio: median(collected.map((m) => m.neckRatio)),
-      shoulderWidth: median(collected.map((m) => m.shoulderWidth)),
-      shoulderTiltDeg: median(collected.map((m) => m.shoulderTiltDeg)),
-    }
+    const metrics = medianMetrics(collected)
 
     await saveCalibration({
       createdAt: Date.now(),

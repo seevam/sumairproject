@@ -24,13 +24,16 @@ function advance(seconds: number, deviationPct = 0, present = true) {
 beforeEach(async () => {
   vi.clearAllMocks()
   useSession.getState().reset()
-  useSettings.setState({
-    mode: 'entertainment', // 30 min breaks, 60s posture dwell
-    breakIntervalMin: 30,
-    sensitivity: 'medium', // 15% warning threshold
-    notificationStyles: ['visual', 'audio', 'desktop'],
-    participantId: 'P-TEST',
-  })
+  useSettings.setState({ mode: 'entertainment', participantId: 'P-TEST' })
+  useSettings.getState().updateMode(
+    {
+      breakIntervalMin: 30,
+      sensitivity: 'medium', // 15% warning threshold
+      notificationStyles: ['visual', 'audio', 'desktop'],
+      postureAlertSeconds: 60,
+    },
+    'entertainment',
+  )
   await useSession.getState().start()
 })
 
@@ -54,6 +57,7 @@ describe('posture alerts', () => {
 
   it('respects the longer 90s dwell in study mode', () => {
     useSettings.setState({ mode: 'study' })
+    useSettings.getState().updateMode({ postureAlertSeconds: 90, sensitivity: 'medium' }, 'study')
     advance(70, 25)
     expect(useSession.getState().postureAlerts).toBe(0)
     advance(25, 25)
@@ -83,11 +87,11 @@ describe('posture alerts', () => {
   })
 
   it('applies the sensitivity setting to the threshold', () => {
-    useSettings.setState({ sensitivity: 'low' }) // 22% warning
+    useSettings.getState().updateMode({ sensitivity: 'low' }) // 22% warning
     advance(120, 18)
     expect(useSession.getState().postureAlerts).toBe(0)
 
-    useSettings.setState({ sensitivity: 'high' }) // 10% warning
+    useSettings.getState().updateMode({ sensitivity: 'high' }) // 10% warning
     advance(70, 18)
     expect(useSession.getState().postureAlerts).toBe(1)
   })
@@ -103,7 +107,7 @@ describe('break reminders', () => {
   })
 
   it('honours a 45-minute interval', () => {
-    useSettings.setState({ breakIntervalMin: 45 })
+    useSettings.getState().updateMode({ breakIntervalMin: 45 })
     advance(40 * 60)
     expect(useSession.getState().phase).toBe('active')
     advance(6 * 60)

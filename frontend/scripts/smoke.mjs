@@ -93,7 +93,7 @@ console.log('\n== onboarding ==')
 await page.getByRole('button', { name: 'Continue as Guest' }).click()
 await page.waitForURL('**/onboarding/1')
 check('step 1 shows the welcome copy', await visible(page.getByRole('heading', { name: /Welcome to PostureGuard/ })))
-check('progress reads 1 / 4', await visible(page.getByText('1 / 4')))
+check('progress reads 1 / 5', await visible(page.getByText('1 / 5')))
 
 await page.getByRole('button', { name: 'Next' }).click()
 await page.waitForURL('**/onboarding/2')
@@ -101,23 +101,41 @@ check('step 2 lists all four capabilities', await countIs(page.locator('ul li'),
 
 await page.getByRole('button', { name: 'Next' }).click()
 await page.waitForURL('**/onboarding/3')
+check('step 3 collects the user profile', await visible(page.getByRole('heading', { name: /About You/ })))
+
+// All three profile fields must persist, since they feed the study dataset.
+await page.getByLabel('Age').fill('16')
+await page.getByRole('button', { name: 'gamer', exact: true }).click()
+await page.waitForTimeout(250)
+const profile = await page.evaluate(() => JSON.parse(localStorage.getItem('postureguard:settings')).state)
+check('age is stored', profile.profile.age === 16, JSON.stringify(profile.profile))
+check('behaviour type is stored', profile.profile.behaviorType === 'gamer', String(profile.profile.behaviorType))
+check('persona selects its default activity', profile.profile.preferredActivity === 'gaming', String(profile.profile.preferredActivity))
+check('persona switches the starting mode', profile.mode === 'entertainment', profile.mode)
+
+await page.getByRole('button', { name: 'Next' }).click()
+await page.waitForURL('**/onboarding/4')
 check(
-  'step 3 shows the four preference rows',
+  'step 4 shows the per-mode preference rows',
   await countIs(
-    page.getByRole('button').filter({ hasText: /Activity Type|Notification Style|Break Interval|Posture Sensitivity/ }),
+    page.getByRole('button').filter({ hasText: /Notification Style|Break Interval|Posture Sensitivity|Mode/ }),
     4,
   ),
 )
 
-// Preferences set here must actually persist, not just look interactive.
+// Editing here must write to the ACTIVE mode only - the whole point of item 4.
+const before = await page.evaluate(() => JSON.parse(localStorage.getItem('postureguard:settings')).state.modes)
 await page.getByRole('button', { name: /Break Interval/ }).click()
-await page.waitForTimeout(200)
-const interval = await page.evaluate(() => JSON.parse(localStorage.getItem('postureguard:settings')).state.breakIntervalMin)
-check('tapping a preference row changes the stored setting', [30, 45, 60].includes(interval), String(interval))
+await page.waitForTimeout(250)
+const after = await page.evaluate(() => JSON.parse(localStorage.getItem('postureguard:settings')).state.modes)
+check('editing changes the active mode', after.entertainment.breakIntervalMin !== before.entertainment.breakIntervalMin,
+  `${before.entertainment.breakIntervalMin} -> ${after.entertainment.breakIntervalMin}`)
+check('the other mode is untouched', after.study.breakIntervalMin === before.study.breakIntervalMin,
+  `${before.study.breakIntervalMin} -> ${after.study.breakIntervalMin}`)
 
 await page.getByRole('button', { name: 'Next' }).click()
-await page.waitForURL('**/onboarding/4')
-check('step 4 confirms setup is done', await visible(page.getByRole('heading', { name: /All Set/ })))
+await page.waitForURL('**/onboarding/5')
+check('step 5 confirms setup is done', await visible(page.getByRole('heading', { name: /All Set/ })))
 
 await page.getByRole('button', { name: 'Start Calibration' }).click()
 await page.waitForURL('**/calibrate')
@@ -182,13 +200,52 @@ for (const [route, marker] of [
 
 console.log('\n== settings persist ==')
 await page.goto(`${BASE}/settings`, { waitUntil: 'networkidle' })
-await page.getByRole('button', { name: '60 min' }).click()
-await page.getByRole('button', { name: 'high', exact: true }).click()
+await page.waitForTimeout(600)
+
+// Each mode has its own editor, so these controls must be scoped to one of them.
+const studyEditor = page.locator('section').filter({ hasText: 'Study Mode settings' })
+await studyEditor.getByRole('button', { name: '60 min' }).click()
+await studyEditor.getByRole('button', { name: 'low', exact: true }).click()
 await page.reload({ waitUntil: 'networkidle' })
-await page.waitForTimeout(400)
+await page.waitForTimeout(600)
+
 const persisted = await page.evaluate(() => JSON.parse(localStorage.getItem('postureguard:settings')).state)
-check('break interval persisted', persisted.breakIntervalMin === 60, JSON.stringify(persisted.breakIntervalMin))
-check('sensitivity persisted', persisted.sensitivity === 'high', persisted.sensitivity)
+check('break interval persisted', persisted.modes.study.breakIntervalMin === 60, String(persisted.modes.study.breakIntervalMin))
+check('sensitivity persisted', persisted.modes.study.sensitivity === 'low', persisted.modes.study.sensitivity)
+check('the edit did not leak into the other mode', persisted.modes.entertainment.breakIntervalMin !== 60,
+  String(persisted.modes.entertainment.breakIntervalMin))
+
+console.log('\n== mode toggle restores saved settings ==')
+await page.goto(`${BASE}/settings`, { waitUntil: 'networkidle' })
+await page.waitForTimeout(600)
+await page.evaluate(() => {
+  const raw = JSON.parse(localStorage.getItem('postureguard:settings'))
+  raw.state.mode = 'study'
+  raw.state.modes.study = { ...raw.state.modes.study, breakIntervalMin: 60, sensitivity: 'low' }
+  raw.state.modes.entertainment = { ...raw.state.modes.entertainment, breakIntervalMin: 30, sensitivity: 'high' }
+  localStorage.setItem('postureguard:settings', JSON.stringify(raw))
+})
+await page.reload({ waitUntil: 'networkidle' })
+await page.waitForTimeout(600)
+
+await page.getByRole('button', { name: /Entertainment Mode/ }).first().click()
+await page.waitForTimeout(300)
+let live = await page.evaluate(() => JSON.parse(localStorage.getItem('postureguard:settings')).state)
+check('switching to Entertainment loads its own config',
+  live.mode === 'entertainment' && live.modes.entertainment.breakIntervalMin === 30 && live.modes.entertainment.sensitivity === 'high',
+  JSON.stringify(live.modes.entertainment))
+
+await page.getByRole('button', { name: /Study Mode/ }).first().click()
+await page.waitForTimeout(300)
+live = await page.evaluate(() => JSON.parse(localStorage.getItem('postureguard:settings')).state)
+check('switching back to Study restores its own config',
+  live.mode === 'study' && live.modes.study.breakIntervalMin === 60 && live.modes.study.sensitivity === 'low',
+  JSON.stringify(live.modes.study))
+check('neither switch mutated the other mode',
+  live.modes.entertainment.breakIntervalMin === 30 && live.modes.study.breakIntervalMin === 60)
+
+console.log('\n== recalibrate is reachable from settings ==')
+check('settings offers re-calibration', await visible(page.getByRole('link', { name: /Re-calibrate/ })))
 
 console.log('\n== CSV export downloads ==')
 // Seed a completed session directly into IndexedDB so export has something real.

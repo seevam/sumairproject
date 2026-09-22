@@ -75,6 +75,43 @@ This is the core design constraint, not a feature bolted on afterwards.
 
 ---
 
+## User profile
+
+Collected on onboarding step 3 and editable in Settings:
+
+| Field | Feeds |
+|---|---|
+| **Age** | The fallback posture model when calibration is skipped, and a grouping variable in the pilot analysis |
+| **Behaviour type** (student / gamer / worker) | Which mode you start in — gamers begin in Entertainment, students and workers in Study |
+| **Preferred activity** (studying / gaming / working) | Recorded with each session |
+
+Behaviour type and preferred activity look similar but do different jobs:
+behaviour type is a **stable persona** that picks your defaults, while activity is
+**what you are doing in this session** and can differ from it. Both are exported.
+
+> On age and calibration: head size relative to shoulder breadth decreases through
+> adolescence, so a younger participant's nose sits proportionally higher above
+> the shoulder line at the same posture. `defaultBaseline(age)` nudges the
+> fallback ratio for that. It is a coarse anthropometric approximation, **not a
+> validated model**, and it only applies to users who skip calibration — a real
+> capture replaces it entirely.
+
+## Modes
+
+Study and Entertainment each keep their **own saved settings**. Switching modes
+loads that mode's configuration; it never carries the other mode's values across.
+
+| | Study (default) | Entertainment (default) |
+|---|---|---|
+| Break interval | 45 min | 30 min |
+| Posture sensitivity | Medium (15%) | High (10%) |
+| Alert after slouching for | 90 s | 60 s |
+| Alert channels | All three | All three |
+
+Every one of those is editable per mode in **Settings → Modes**, where both
+editors are shown at once so each can be configured in a single visit. Set them
+up once, then just toggle.
+
 ## Authentication
 
 Clerk, wired guest-first. Auth is genuinely optional at every layer:
@@ -148,8 +185,8 @@ or create `frontend/.env` with `VITE_API_BASE_URL=http://localhost:5000`.
 ## Tests
 
 ```bash
-cd frontend && npm test              # 69 unit tests: posture maths, CSV, sync, session engine
-cd backend  && python -m pytest -q   # 19 API tests (SQLite)
+cd frontend && npm test              # 96 unit tests: posture maths, calibration, CSV, sync, settings, session engine
+cd backend  && python -m pytest -q   # 22 API tests (SQLite)
 
 # The backend suite must also pass against Postgres, which is what production uses:
 cd backend && DATABASE_URL=postgresql://... python -m pytest -q
@@ -270,10 +307,14 @@ your frontend origin (CORS is needed again) and enter the backend URL in
 `postureguard_sessions_YYYY-MM-DD.csv` — one row per session:
 
 ```
-participant_id, date, session_start, session_duration_min,
+participant_id, age, behavior_type, preferred_activity,
+date, session_start, session_duration_min,
 avg_posture_deviation_pct, posture_alerts_triggered, breaks_prompted,
 breaks_taken, breaks_snoozed, compliance_rate_pct, mode
 ```
+
+The profile columns travel with each row, so the dataset can be grouped by age
+or persona without joining a second file.
 
 `postureguard_events_YYYY-MM-DD.csv` — the within-session timeline (one row per
 event, with seconds-into-session), for time-to-correction analysis.
@@ -282,15 +323,28 @@ event, with seconds-into-session), for time-to-correction analysis.
 
 ## Configuration reference
 
-| Setting | Options | Default |
+| Setting | Scope | Options |
 |---|---|---|
-| Mode | Study / Entertainment | Study |
-| Break interval | 30 / 45 / 60 min | Follows mode (45 / 30) |
-| Posture sensitivity | Low (22%) / Medium (15%) / High (10%) | Medium |
-| Alert channels | In-app badge, audio, desktop notification | All three |
+| Mode | Global | Study / Entertainment |
+| Break interval | **Per mode** | 30 / 45 / 60 min |
+| Posture sensitivity | **Per mode** | Low (22%) / Medium (15%) / High (10%) |
+| Alert dwell | **Per mode** | 45 / 60 / 90 / 120 s |
+| Alert channels | **Per mode** | In-app badge, audio, desktop notification |
+| Age, behaviour type, activity | Profile | See above |
 
 Fixed thresholds: presence grace period 60s, minimum break 3 min of landmark
 absence, snooze 5 min once per break.
+
+### Camera profile — front-facing only
+
+Confirmed decision. The deviation maths reads the nose against the shoulder
+line, which is only meaningful from the front; a rear or side camera would
+produce landmarks it cannot interpret. So no other orientation is offered and
+there is no device picker.
+
+`facingMode: 'user'` is set as a *preference*, not `exact`, on purpose: most
+laptop and USB webcams do not report a facingMode at all, and an exact
+constraint fails outright on those machines. Audio is never requested.
 
 ---
 

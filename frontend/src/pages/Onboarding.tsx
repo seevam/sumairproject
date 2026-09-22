@@ -10,11 +10,11 @@ import {
   Check,
 } from 'lucide-react'
 import { useEffect } from 'react'
-import { MODE_PRESETS, useSettings } from '../store/settings'
+import { BEHAVIOR_DEFAULT_MODE, MODE_META, useSettings } from '../store/settings'
 import { useOnboarding } from '../store/onboarding'
-import type { ActivityType, NotificationStyle, Sensitivity } from '../types'
+import type { ActivityType, BehaviorType, NotificationStyle, Sensitivity } from '../types'
 
-const TOTAL = 4
+const TOTAL = 5
 
 export function Onboarding() {
   const { step } = useParams<{ step: string }>()
@@ -53,8 +53,9 @@ export function Onboarding() {
       <div className="flex flex-1 flex-col">
         {current === 1 && <StepWelcome />}
         {current === 2 && <StepHowItWorks />}
-        {current === 3 && <StepPersonalise />}
-        {current === 4 && <StepReady />}
+        {current === 3 && <StepAboutYou />}
+        {current === 4 && <StepPersonalise />}
+        {current === 5 && <StepReady />}
       </div>
 
       <div className="space-y-2 pt-6">
@@ -131,15 +132,102 @@ function StepHowItWorks() {
   )
 }
 
+function StepAboutYou() {
+  const settings = useSettings()
+  const { profile } = settings
+
+  return (
+    <div className="space-y-5">
+      <div className="space-y-2">
+        <h1 className="text-3xl font-bold tracking-tight">About You</h1>
+        <p className="text-sm leading-relaxed text-muted">
+          Three quick details. They set your starting mode and are recorded with your sessions so
+          results can be grouped by age and persona.
+        </p>
+      </div>
+
+      <div className="card space-y-2 p-4">
+        <label className="label" htmlFor="ob-age">Age</label>
+        <input
+          id="ob-age"
+          type="number"
+          inputMode="numeric"
+          min={5}
+          max={120}
+          className="input"
+          placeholder="e.g. 16"
+          value={profile.age ?? ''}
+          onChange={(e) => {
+            const n = Number(e.target.value)
+            settings.setProfile({ age: e.target.value === '' || Number.isNaN(n) ? null : n })
+          }}
+        />
+        <p className="text-xs leading-relaxed text-muted">
+          Used to pick a starting posture model if you skip calibration, and as a grouping variable
+          in the study. Calibrating replaces the estimate with your own measurements.
+        </p>
+      </div>
+
+      <div className="card space-y-2 p-4">
+        <span className="label">Behaviour type</span>
+        <div className="grid grid-cols-3 gap-2">
+          {(['student', 'gamer', 'worker'] as BehaviorType[]).map((b) => (
+            <button
+              key={b}
+              onClick={() => settings.applyBehaviorType(b)}
+              aria-pressed={profile.behaviorType === b}
+              className={`rounded-btn border py-2.5 text-sm font-medium capitalize transition-colors ${
+                profile.behaviorType === b
+                  ? 'border-accent bg-accent/10 text-accent'
+                  : 'border-line text-muted hover:text-white'
+              }`}
+            >
+              {b}
+            </button>
+          ))}
+        </div>
+        <p className="text-xs leading-relaxed text-muted">
+          {profile.behaviorType
+            ? `Starts you in ${MODE_META[BEHAVIOR_DEFAULT_MODE[profile.behaviorType]].label} Mode. You can switch any time.`
+            : 'Sets which mode you start in.'}
+        </p>
+      </div>
+
+      <div className="card space-y-2 p-4">
+        <span className="label">Preferred activity</span>
+        <div className="grid grid-cols-3 gap-2">
+          {(['studying', 'gaming', 'working'] as ActivityType[]).map((a) => (
+            <button
+              key={a}
+              onClick={() => settings.setProfile({ preferredActivity: a })}
+              aria-pressed={profile.preferredActivity === a}
+              className={`rounded-btn border py-2.5 text-sm font-medium capitalize transition-colors ${
+                profile.preferredActivity === a
+                  ? 'border-accent bg-accent/10 text-accent'
+                  : 'border-line text-muted hover:text-white'
+              }`}
+            >
+              {a}
+            </button>
+          ))}
+        </div>
+        <p className="text-xs leading-relaxed text-muted">
+          What you are usually doing at this desk. Recorded with each session.
+        </p>
+      </div>
+    </div>
+  )
+}
+
 function StepPersonalise() {
   const settings = useSettings()
+  const cfg = settings.active()
 
-  const activities: ActivityType[] = ['studying', 'gaming', 'working']
   const sensitivities: Sensitivity[] = ['low', 'medium', 'high']
   const intervals = [30, 45, 60]
 
-  const styleSummary = settings.notificationStyles.length
-    ? settings.notificationStyles
+  const styleSummary = cfg.notificationStyles.length
+    ? cfg.notificationStyles
         .map((s) => ({ visual: 'In-app', audio: 'Sound', desktop: 'Desktop' })[s])
         .join(', ')
     : 'None selected'
@@ -152,10 +240,8 @@ function StepPersonalise() {
       ['visual', 'audio'],
       ['visual'],
     ]
-    const i = options.findIndex(
-      (o) => o.join() === [...settings.notificationStyles].sort().join(),
-    )
-    settings.update({ notificationStyles: options[(i + 1) % options.length] })
+    const i = options.findIndex((o) => o.join() === [...cfg.notificationStyles].sort().join())
+    settings.updateMode({ notificationStyles: options[(i + 1) % options.length] })
   }
 
   return (
@@ -163,23 +249,12 @@ function StepPersonalise() {
       <div className="space-y-2">
         <h1 className="text-3xl font-bold tracking-tight">Personalize Your Experience</h1>
         <p className="text-sm leading-relaxed text-muted">
-          Choose a few preferences to get the most out of PostureGuard.
+          These settings belong to {MODE_META[settings.mode].label} Mode. The other mode keeps its
+          own, so switching modes brings its configuration with it.
         </p>
       </div>
 
       <div className="space-y-2.5">
-        <PrefRow
-          icon={Activity}
-          title="Activity Type"
-          value={settings.activityType}
-          onClick={() => {
-            const i = activities.indexOf(settings.activityType)
-            const nextActivity = activities[(i + 1) % activities.length]
-            settings.update({ activityType: nextActivity })
-            // Gaming maps to the more insistent preset, studying to the quieter one.
-            settings.setMode(nextActivity === 'gaming' ? 'entertainment' : 'study')
-          }}
-        />
         <PrefRow
           icon={Bell}
           title="Notification Style"
@@ -189,26 +264,31 @@ function StepPersonalise() {
         <PrefRow
           icon={Clock}
           title="Break Interval"
-          value={`${settings.breakIntervalMin} min`}
+          value={`${cfg.breakIntervalMin} min`}
           onClick={() => {
-            const i = intervals.indexOf(settings.breakIntervalMin)
-            settings.update({ breakIntervalMin: intervals[(i + 1) % intervals.length] })
+            const i = intervals.indexOf(cfg.breakIntervalMin)
+            settings.updateMode({ breakIntervalMin: intervals[(i + 1) % intervals.length] })
           }}
         />
         <PrefRow
           icon={Crosshair}
           title="Posture Sensitivity"
-          value={settings.sensitivity}
+          value={cfg.sensitivity}
           onClick={() => {
-            const i = sensitivities.indexOf(settings.sensitivity)
-            settings.update({ sensitivity: sensitivities[(i + 1) % sensitivities.length] })
+            const i = sensitivities.indexOf(cfg.sensitivity)
+            settings.updateMode({ sensitivity: sensitivities[(i + 1) % sensitivities.length] })
           }}
+        />
+        <PrefRow
+          icon={Activity}
+          title="Mode"
+          value={`${MODE_META[settings.mode].label} - tap to switch`}
+          onClick={() => settings.setMode(settings.mode === 'study' ? 'entertainment' : 'study')}
         />
       </div>
 
       <p className="text-xs leading-relaxed text-muted">
-        {MODE_PRESETS[settings.mode].label} Mode - {MODE_PRESETS[settings.mode].blurb} You can
-        change any of this later in Settings.
+        {MODE_META[settings.mode].blurb} You can fine-tune both modes later in Settings.
       </p>
     </div>
   )

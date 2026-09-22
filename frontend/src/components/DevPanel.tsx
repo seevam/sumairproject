@@ -90,8 +90,8 @@ export function DevPanel() {
               ))}
             </div>
             <p className="mt-1.5 text-[10px] leading-relaxed text-muted">
-              At 60x a {settings.breakIntervalMin}-minute break interval arrives in{' '}
-              {Math.round((settings.breakIntervalMin * 60) / 60)}s.
+              At 60x a {settings.active().breakIntervalMin}-minute break interval arrives in{' '}
+              {settings.active().breakIntervalMin}s.
             </p>
           </div>
 

@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import type { PostureState, SessionEvent, SessionEventType, SessionRecord } from '../types'
 import { appendEvent, saveSession } from '../lib/db'
 import { fireAlert } from '../lib/notify'
-import { MODE_PRESETS, useSettings } from './settings'
+import { useSettings } from './settings'
 import { queueSync } from '../lib/sync'
 import { thresholdFor } from '../lib/posture'
 
@@ -119,6 +119,9 @@ function snapshot(s: SessionState, ended: boolean): SessionRecord {
   return {
     id: s.sessionId!,
     participantId: s.participantId || settings.participantId,
+    age: settings.profile.age,
+    behaviorType: settings.profile.behaviorType,
+    activityType: settings.profile.preferredActivity,
     startTime: s.startTime!,
     endTime: ended ? Date.now() : null,
     durationSeconds: Math.round(s.elapsedSeconds),
@@ -189,6 +192,7 @@ export const useSession = create<SessionState & SessionActions>()((set, get) => 
     if (s.phase === 'idle' || s.phase === 'ended') return
 
     const settings = useSettings.getState()
+    const modeSettings = settings.active()
     const step = s.timeScale
     const patch: Partial<SessionState> = { elapsedSeconds: s.elapsedSeconds + step }
 
@@ -234,7 +238,7 @@ export const useSession = create<SessionState & SessionActions>()((set, get) => 
           title: 'Time for a break',
           body: `You have been sitting for ${Math.round(s.sittingSeconds / 60)} minutes.`,
           tag: 'break',
-          styles: settings.notificationStyles,
+          styles: modeSettings.notificationStyles,
           mode: settings.mode,
           urgent: true,
         })
@@ -263,9 +267,9 @@ export const useSession = create<SessionState & SessionActions>()((set, get) => 
     patch.deviationSamples = s.deviationSamples + step
 
     // --- posture state machine ---------------------------------------------
-    const { warning } = thresholdFor(settings.sensitivity)
+    const { warning } = thresholdFor(modeSettings.sensitivity)
     const over = s.deviationPct >= warning
-    const dwell = MODE_PRESETS[settings.mode].postureAlertSeconds
+    const dwell = modeSettings.postureAlertSeconds
 
     if (over) {
       const sustained = s.sustainedSeconds + step
@@ -287,7 +291,7 @@ export const useSession = create<SessionState & SessionActions>()((set, get) => 
             title: 'Check your posture',
             body: `You have been slouching for ${Math.round(dwell)}s. Sit back and lift your chest.`,
             tag: 'posture',
-            styles: settings.notificationStyles,
+            styles: modeSettings.notificationStyles,
             mode: settings.mode,
           })
         }
@@ -309,7 +313,7 @@ export const useSession = create<SessionState & SessionActions>()((set, get) => 
     }
 
     // --- break due ----------------------------------------------------------
-    const intervalSeconds = settings.breakIntervalMin * 60
+    const intervalSeconds = modeSettings.breakIntervalMin * 60
     if ((patch.sittingSeconds ?? 0) >= intervalSeconds) {
       patch.phase = 'break_prompt'
       patch.breaksPrompted = s.breaksPrompted + 1
@@ -320,7 +324,7 @@ export const useSession = create<SessionState & SessionActions>()((set, get) => 
         title: 'Time for a break',
         body: `You have been sitting for ${Math.round((patch.sittingSeconds ?? 0) / 60)} minutes.`,
         tag: 'break',
-        styles: settings.notificationStyles,
+        styles: modeSettings.notificationStyles,
         mode: settings.mode,
         urgent: true,
       })
@@ -369,7 +373,7 @@ export const useSession = create<SessionState & SessionActions>()((set, get) => 
       breaksSnoozed: s.breaksSnoozed + 1,
       snoozeSecondsRemaining: SNOOZE_MINUTES * 60,
       // Hold sitting time just under the threshold so only the snooze timer can re-fire.
-      sittingSeconds: Math.min(s.sittingSeconds, useSettings.getState().breakIntervalMin * 60 - 1),
+      sittingSeconds: Math.min(s.sittingSeconds, useSettings.getState().active().breakIntervalMin * 60 - 1),
     })
   },
 
@@ -380,7 +384,7 @@ export const useSession = create<SessionState & SessionActions>()((set, get) => 
   forceBreakPrompt: () => {
     const s = get()
     if (s.phase !== 'active') return
-    set({ sittingSeconds: useSettings.getState().breakIntervalMin * 60 - 1 })
+    set({ sittingSeconds: useSettings.getState().active().breakIntervalMin * 60 - 1 })
   },
 
   reset: () => set({ ...initial, timeScale: get().timeScale }),

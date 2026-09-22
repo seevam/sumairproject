@@ -31,6 +31,9 @@ import db as store
 
 SESSION_CSV_HEADER = [
     "participant_id",
+    "age",
+    "behavior_type",
+    "preferred_activity",
     "date",
     "session_start",
     "session_duration_min",
@@ -104,12 +107,16 @@ def create_app() -> Flask:
         db.execute(
             """
             INSERT INTO sessions (
-                id, participant_id, user_id, start_time, end_time, duration_seconds,
+                id, participant_id, user_id, age, behavior_type, activity_type,
+                start_time, end_time, duration_seconds,
                 sitting_seconds, mode, avg_deviation_pct, posture_alerts,
                 breaks_prompted, breaks_taken, breaks_snoozed, received_at
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET
                 user_id           = COALESCE(excluded.user_id, sessions.user_id),
+                age               = excluded.age,
+                behavior_type     = excluded.behavior_type,
+                activity_type     = excluded.activity_type,
                 end_time          = excluded.end_time,
                 duration_seconds  = excluded.duration_seconds,
                 sitting_seconds   = excluded.sitting_seconds,
@@ -124,6 +131,9 @@ def create_app() -> Flask:
                 session["id"],
                 str(session.get("participantId", "unknown"))[:64],
                 identity.user_id,
+                int(session["age"]) if isinstance(session.get("age"), (int, float)) else None,
+                str(session["behaviorType"])[:32] if session.get("behaviorType") else None,
+                str(session["activityType"])[:32] if session.get("activityType") else None,
                 int(session.get("startTime") or 0),
                 int(session["endTime"]) if session.get("endTime") else None,
                 int(session.get("durationSeconds") or 0),
@@ -201,6 +211,9 @@ def create_app() -> Flask:
             writer.writerow(
                 [
                     r["participant_id"],
+                    r["age"] if r["age"] is not None else "",
+                    r["behavior_type"] or "",
+                    r["activity_type"] or "",
                     start.date().isoformat(),
                     start.isoformat(),
                     round(r["duration_seconds"] / 60, 1),

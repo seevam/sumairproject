@@ -1,11 +1,16 @@
 """End-to-end checks for the sync + export surface."""
 
+import csv
+import io
 import os
 
 def session_payload(**overrides):
     session = {
         "id": "s_abc",
         "participantId": "P-TEST",
+        "age": 16,
+        "behaviorType": "student",
+        "activityType": "studying",
         "startTime": 1_757_000_000_000,
         "endTime": 1_757_003_600_000,
         "durationSeconds": 3600,
@@ -76,26 +81,62 @@ def test_sync_refuses_landmark_data(client):
     assert "refuses" in r.get_json()["error"]
 
 
+def export_rows(client):
+    """Parse the session export into dicts, so tests do not depend on column order."""
+    body = client.get("/api/sessions/export").get_data(as_text=True)
+    return list(csv.DictReader(io.StringIO(body)))
+
+
 def test_session_csv_matches_the_prd_columns(client):
     client.post("/api/session/sync", json=session_payload())
-    body = client.get("/api/sessions/export").get_data(as_text=True)
-    header, row = body.strip().splitlines()[:2]
+    header = client.get("/api/sessions/export").get_data(as_text=True).strip().splitlines()[0]
 
     assert header.split(",") == [
-        "participant_id", "date", "session_start", "session_duration_min",
+        "participant_id", "age", "behavior_type", "preferred_activity",
+        "date", "session_start", "session_duration_min",
         "avg_posture_deviation_pct", "posture_alerts_triggered", "breaks_prompted",
         "breaks_taken", "breaks_snoozed", "compliance_rate_pct", "mode",
     ]
-    fields = row.split(",")
-    assert fields[0] == "P-TEST"
-    assert fields[3] == "60.0"          # 3600s -> minutes
-    assert fields[9] == "50.0"          # 1 of 2 breaks taken
+
+    row = export_rows(client)[0]
+    assert row["participant_id"] == "P-TEST"
+    assert row["session_duration_min"] == "60.0"   # 3600s -> minutes
+    assert row["compliance_rate_pct"] == "50.0"    # 1 of 2 breaks taken
 
 
 def test_compliance_is_100_when_no_break_was_due(client):
     client.post("/api/session/sync", json=session_payload(breaksPrompted=0, breaksTaken=0))
-    row = client.get("/api/sessions/export").get_data(as_text=True).strip().splitlines()[1]
-    assert row.split(",")[9] == "100.0"
+    assert export_rows(client)[0]["compliance_rate_pct"] == "100.0"
+
+
+def test_profile_is_stored_and_exported(client):
+    """Age and persona travel with the session so the dataset is self-contained."""
+    client.post("/api/session/sync", json=session_payload(age=16, behaviorType="student", activityType="studying"))
+    row = export_rows(client)[0]
+    assert row["age"] == "16"
+    assert row["behavior_type"] == "student"
+    assert row["preferred_activity"] == "studying"
+
+
+def test_profile_may_be_absent(client):
+    """A guest who skipped the profile step must still sync cleanly."""
+    payload = session_payload()
+    for field in ("age", "behaviorType", "activityType"):
+        payload["session"].pop(field, None)
+    assert client.post("/api/session/sync", json=payload).status_code == 200
+
+    row = export_rows(client)[0]
+    assert row["age"] == ""
+    assert row["behavior_type"] == ""
+
+
+def test_profile_updates_on_resync(client):
+    """A participant who fills in their age later must not leave stale rows behind."""
+    client.post("/api/session/sync", json=session_payload(age=None, behaviorType=None))
+    client.post("/api/session/sync", json=session_payload(age=17, behaviorType="gamer"))
+    row = export_rows(client)[0]
+    assert row["age"] == "17"
+    assert row["behavior_type"] == "gamer"
 
 
 def test_export_filters_by_participant(client):
