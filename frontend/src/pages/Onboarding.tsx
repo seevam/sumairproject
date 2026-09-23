@@ -10,7 +10,7 @@ import {
   Check,
 } from 'lucide-react'
 import { useEffect } from 'react'
-import { BEHAVIOR_DEFAULT_MODE, MODE_META, useSettings } from '../store/settings'
+import { BEHAVIOR_DEFAULT_MODE, MAX_AGE, MIN_AGE, MODE_META, parseAge, useSettings } from '../store/settings'
 import { useOnboarding } from '../store/onboarding'
 import type { ActivityType, BehaviorType, NotificationStyle, Sensitivity } from '../types'
 
@@ -152,15 +152,12 @@ function StepAboutYou() {
           id="ob-age"
           type="number"
           inputMode="numeric"
-          min={5}
-          max={120}
+          min={MIN_AGE}
+          max={MAX_AGE}
           className="input"
           placeholder="e.g. 16"
           value={profile.age ?? ''}
-          onChange={(e) => {
-            const n = Number(e.target.value)
-            settings.setProfile({ age: e.target.value === '' || Number.isNaN(n) ? null : n })
-          }}
+          onChange={(e) => settings.setProfile({ age: parseAge(e.target.value) })}
         />
         <p className="text-xs leading-relaxed text-muted">
           Used to pick a starting posture model if you skip calibration, and as a grouping variable

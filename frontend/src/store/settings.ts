@@ -62,6 +62,10 @@ function newParticipantId(): string {
   return `P-${Math.random().toString(36).slice(2, 8).toUpperCase()}`
 }
 
+/** Plausible ages; the backend applies the same bounds. */
+export const MIN_AGE = 1
+export const MAX_AGE = 130
+
 const EMPTY_PROFILE: UserProfile = {
   age: null,
   behaviorType: null,
@@ -79,8 +83,13 @@ interface SettingsStore extends Settings {
   update: (patch: Partial<Omit<Settings, 'modes' | 'profile'>>) => void
   setProfile: (patch: Partial<UserProfile>) => void
   /** Apply a persona: selects its default mode and preferred activity. */
-  applyBehaviorType: (behaviorType: BehaviorType) => void
-  resetModes: () => void
+  /**
+   * Apply a persona. By default this also selects the persona's starting mode,
+   * which is what onboarding wants. Settings passes switchMode: false, because
+   * correcting your persona must never silently change the mode of a session
+   * that is already running - modes change only through the mode toggle.
+   */
+  applyBehaviorType: (behaviorType: BehaviorType, options?: { switchMode?: boolean }) => void
 }
 
 function freshModes(): Record<Mode, ModeSettings> {
@@ -117,18 +126,25 @@ export const useSettings = create<SettingsStore>()(
 
       setProfile: (patch) => set((state) => ({ profile: { ...state.profile, ...patch } })),
 
-      applyBehaviorType: (behaviorType) =>
-        set((state) => ({
-          profile: {
-            ...state.profile,
-            behaviorType,
-            // Only fill the activity if the user has not chosen one themselves.
-            preferredActivity: state.profile.preferredActivity ?? BEHAVIOR_DEFAULT_ACTIVITY[behaviorType],
-          },
-          mode: BEHAVIOR_DEFAULT_MODE[behaviorType],
-        })),
-
-      resetModes: () => set({ modes: freshModes() }),
+      applyBehaviorType: (behaviorType, { switchMode = true } = {}) =>
+        set((state) => {
+          const { preferredActivity, behaviorType: previous } = state.profile
+          // Only fill the activity if the user has not chosen one themselves. A
+          // value the previous persona filled in was not their choice, so it
+          // follows the persona rather than sticking.
+          const autoFilled = previous !== null && preferredActivity === BEHAVIOR_DEFAULT_ACTIVITY[previous]
+          return {
+            profile: {
+              ...state.profile,
+              behaviorType,
+              preferredActivity:
+                preferredActivity === null || autoFilled
+                  ? BEHAVIOR_DEFAULT_ACTIVITY[behaviorType]
+                  : preferredActivity,
+            },
+            ...(switchMode ? { mode: BEHAVIOR_DEFAULT_MODE[behaviorType] } : {}),
+          }
+        }),
     }),
     {
       name: 'postureguard:settings',
@@ -143,6 +159,12 @@ export const useSettings = create<SettingsStore>()(
         if (version >= 2) return persisted as SettingsStore
 
         const old = (persisted ?? {}) as Record<string, unknown>
+        // v1's flat fields are consumed below; drop them so they are not
+        // carried (and re-persisted) alongside the new per-mode shape.
+        const rest = { ...old }
+        for (const key of ['breakIntervalMin', 'sensitivity', 'notificationStyles', 'activityType']) {
+          delete rest[key]
+        }
         const mode = (old.mode === 'entertainment' ? 'entertainment' : 'study') as Mode
         const modes = freshModes()
 
@@ -157,7 +179,7 @@ export const useSettings = create<SettingsStore>()(
         }
 
         return {
-          ...(persisted as object),
+          ...rest,
           mode,
           modes,
           profile: {
@@ -171,7 +193,12 @@ export const useSettings = create<SettingsStore>()(
   ),
 )
 
-/** Non-React read of the active mode's settings. */
-export function activeMode(): ModeSettings {
-  return useSettings.getState().active()
+/**
+ * Parse an age input. Returns null for an empty, non-numeric or implausible
+ * value, and whole years otherwise, matching what the backend will accept.
+ */
+export function parseAge(raw: string): number | null {
+  if (raw.trim() === '') return null
+  const n = Math.floor(Number(raw))
+  return Number.isFinite(n) && n >= MIN_AGE && n <= MAX_AGE ? n : null
 }

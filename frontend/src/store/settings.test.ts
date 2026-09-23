@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { beforeEach, describe, expect, it } from 'vitest'
-import { BEHAVIOR_DEFAULT_MODE, MODE_DEFAULTS, useSettings } from './settings'
+import { BEHAVIOR_DEFAULT_MODE, MODE_DEFAULTS, parseAge, useSettings } from './settings'
 
 /** Reset to a pristine store between tests, since persist shares localStorage. */
 function reset() {
@@ -87,10 +87,32 @@ describe('profile', () => {
     expect(useSettings.getState().profile.preferredActivity).toBe('gaming')
   })
 
+  it('re-fills an activity the previous persona filled in when the persona changes', () => {
+    useSettings.getState().applyBehaviorType('student')
+    useSettings.getState().applyBehaviorType('gamer')
+    expect(useSettings.getState().profile.preferredActivity).toBe('gaming')
+  })
+
   it('never overwrites an activity the user picked themselves', () => {
     useSettings.getState().setProfile({ preferredActivity: 'working' })
     useSettings.getState().applyBehaviorType('gamer')
     expect(useSettings.getState().profile.preferredActivity).toBe('working')
+  })
+})
+
+describe('persona changes outside onboarding', () => {
+  it('can update the persona without touching the active mode', () => {
+    useSettings.getState().setMode('study')
+    useSettings.getState().applyBehaviorType('gamer', { switchMode: false })
+    expect(useSettings.getState().profile.behaviorType).toBe('gamer')
+    // A running Study session must stay in Study.
+    expect(useSettings.getState().mode).toBe('study')
+  })
+
+  it('still switches mode by default, as onboarding expects', () => {
+    useSettings.getState().setMode('study')
+    useSettings.getState().applyBehaviorType('gamer')
+    expect(useSettings.getState().mode).toBe('entertainment')
   })
 })
 
@@ -123,6 +145,12 @@ describe('migration from v1', () => {
     })
   })
 
+  it('drops the v1 flat fields once they have been migrated', () => {
+    const s = migrateV1({ mode: 'study', breakIntervalMin: 60, sensitivity: 'low', activityType: 'working' })
+    expect(s).not.toHaveProperty('breakIntervalMin')
+    expect(s).not.toHaveProperty('activityType')
+  })
+
   it('leaves the other mode on its defaults', () => {
     const s = migrateV1({ mode: 'entertainment', breakIntervalMin: 60, sensitivity: 'low' })
     expect(s.modes.study).toMatchObject(MODE_DEFAULTS.study)
@@ -143,5 +171,19 @@ describe('migration from v1', () => {
     expect(s.mode).toBe('study')
     expect(s.modes.study).toMatchObject(MODE_DEFAULTS.study)
     expect(s.profile.age).toBeNull()
+  })
+})
+
+describe('parseAge', () => {
+  it('returns whole years for a plausible age', () => {
+    expect(parseAge('16')).toBe(16)
+    expect(parseAge('16.7')).toBe(16)
+  })
+
+  it('treats empty, non-numeric and implausible input as unset', () => {
+    expect(parseAge('')).toBeNull()
+    expect(parseAge('abc')).toBeNull()
+    expect(parseAge('-3')).toBeNull()
+    expect(parseAge('1e12')).toBeNull()
   })
 })

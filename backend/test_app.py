@@ -4,6 +4,8 @@ import csv
 import io
 import os
 
+import pytest
+
 def session_payload(**overrides):
     session = {
         "id": "s_abc",
@@ -250,3 +252,83 @@ def test_identify_returns_guest_when_clerk_is_not_configured():
 
     assert clerk_auth.configured() is False
     assert clerk_auth.identify(object()).is_guest is True
+
+
+def test_implausible_age_is_dropped_not_stored(client):
+    """A malformed age must not overflow the column or poison the grouping."""
+    for bad in (True, -4, 10**12, "16"):
+        r = client.post("/api/session/sync", json=session_payload(age=bad))
+        assert r.status_code == 200
+        assert export_rows(client)[0]["age"] == ""
+
+
+def _legacy_sessions_ddl(with_user_id: bool, postgres: bool) -> str:
+    """The sessions table as an earlier release created it."""
+    big = "BIGINT" if postgres else "INTEGER"
+    real = "DOUBLE PRECISION" if postgres else "REAL"
+    user = "user_id TEXT," if with_user_id else ""
+    return (
+        f"CREATE TABLE sessions (id TEXT PRIMARY KEY, participant_id TEXT NOT NULL, {user}"
+        f" start_time {big} NOT NULL, end_time {big}, duration_seconds {big} NOT NULL DEFAULT 0,"
+        f" sitting_seconds {big} NOT NULL DEFAULT 0, mode TEXT NOT NULL DEFAULT 'study',"
+        f" avg_deviation_pct {real} NOT NULL DEFAULT 0, posture_alerts INTEGER NOT NULL DEFAULT 0,"
+        f" breaks_prompted INTEGER NOT NULL DEFAULT 0, breaks_taken INTEGER NOT NULL DEFAULT 0,"
+        f" breaks_snoozed INTEGER NOT NULL DEFAULT 0, received_at {big} NOT NULL)"
+    )
+
+
+@pytest.mark.parametrize(
+    "release,with_user_id",
+    [
+        # Before auth: no user_id. Startup used to crash here, because the create
+        # script indexed user_id before any migration could add it.
+        ("first deploy (87d9b3c)", False),
+        # After auth, before the profile: user_id present, profile columns absent.
+        ("auth (7475b25)", True),
+    ],
+)
+def test_existing_database_is_upgraded_in_place(tmp_path, monkeypatch, release, with_user_id):
+    """A database from any earlier release must start, accept syncs and keep its rows."""
+    import importlib
+
+    postgres = os.environ.get("DATABASE_URL", "").startswith(("postgres://", "postgresql://"))
+    if not postgres:
+        monkeypatch.setenv("POSTUREGUARD_DB", str(tmp_path / "old.db"))
+
+    import db as db_module
+
+    importlib.reload(db_module)
+
+    # Recreate the old release's tables, with one session already in them.
+    with db_module.connection() as conn:
+        conn.execute("DROP TABLE IF EXISTS events")
+        conn.execute("DROP TABLE IF EXISTS sessions")
+        conn.execute(_legacy_sessions_ddl(with_user_id, postgres))
+        conn.execute(
+            "INSERT INTO sessions (id, participant_id, start_time, end_time, received_at)"
+            " VALUES (?, ?, ?, ?, ?)",
+            ("s_legacy", "P-LEGACY", 1_756_000_000_000, 1_756_000_600_000, 1_756_000_600_000),
+        )
+        conn.commit()
+
+    import app as app_module
+
+    importlib.reload(app_module)
+    client = app_module.create_app().test_client()  # must not raise
+
+    assert client.post("/api/session/sync", json=session_payload()).status_code == 200, release
+
+    rows = {r["participant_id"]: r for r in export_rows(client)}
+    assert rows["P-TEST"]["age"] == "16"
+    assert rows["P-TEST"]["behavior_type"] == "student"
+    # Upgrading must not lose what the old release had already collected.
+    assert rows["P-LEGACY"]["age"] == ""
+
+
+def test_schema_upgrade_is_idempotent(client):
+    """Every cold start re-runs the upgrade; running it again must be a no-op."""
+    import db as db_module
+
+    db_module.init_schema()
+    db_module.init_schema()
+    assert client.post("/api/session/sync", json=session_payload()).status_code == 200

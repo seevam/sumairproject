@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { clearCalibration, deleteAllData, loadCalibration } from '../lib/db'
 import { requestNotificationPermission, notificationPermission } from '../lib/notify'
-import { BEHAVIOR_DEFAULT_MODE, MODE_META, useSettings } from '../store/settings'
+import { BEHAVIOR_DEFAULT_MODE, MAX_AGE, MIN_AGE, MODE_META, parseAge, useSettings } from '../store/settings'
 import { SAME_ORIGIN, detectSameOriginBackend } from '../lib/sync'
 import { useSession } from '../store/session'
 import { shortDate, shortTime } from '../lib/time'
@@ -107,15 +107,12 @@ export function Settings() {
               id="age"
               type="number"
               inputMode="numeric"
-              min={5}
-              max={120}
+              min={MIN_AGE}
+              max={MAX_AGE}
               className="input mt-1"
               placeholder="e.g. 16"
               value={settings.profile.age ?? ''}
-              onChange={(e) => {
-                const n = Number(e.target.value)
-                settings.setProfile({ age: e.target.value === '' || Number.isNaN(n) ? null : n })
-              }}
+              onChange={(e) => settings.setProfile({ age: parseAge(e.target.value) })}
             />
           </div>
 
@@ -125,7 +122,7 @@ export function Settings() {
               {(['student', 'gamer', 'worker'] as BehaviorType[]).map((b) => (
                 <button
                   key={b}
-                  onClick={() => settings.applyBehaviorType(b)}
+                  onClick={() => settings.applyBehaviorType(b, { switchMode: false })}
                   className={`flex-1 rounded-btn border py-2.5 text-sm font-medium capitalize transition-colors ${
                     settings.profile.behaviorType === b
                       ? 'border-accent bg-accent/10 text-accent'
@@ -138,7 +135,8 @@ export function Settings() {
             </div>
             {settings.profile.behaviorType && (
               <p className="mt-1 text-xs text-muted">
-                Starts you in {MODE_META[BEHAVIOR_DEFAULT_MODE[settings.profile.behaviorType]].label} Mode.
+                {MODE_META[BEHAVIOR_DEFAULT_MODE[settings.profile.behaviorType]].label} Mode is this persona&rsquo;s
+                default. Changing it here does not switch your current mode.
               </p>
             )}
           </div>

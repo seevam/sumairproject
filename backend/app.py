@@ -46,6 +46,21 @@ SESSION_CSV_HEADER = [
     "mode",
 ]
 
+# Plausible human ages. Anything outside is treated as not supplied rather than
+# stored, so a malformed client cannot overflow the INTEGER column or poison
+# the dataset's age grouping.
+MIN_AGE, MAX_AGE = 1, 130
+
+
+def _clean_age(value: object) -> int | None:
+    # bool is an int subclass; True must not become age 1.
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if value != value or value in (float("inf"), float("-inf")):  # NaN / inf
+        return None
+    age = int(value)
+    return age if MIN_AGE <= age <= MAX_AGE else None
+
 
 def get_db() -> store.Connection:
     """One connection per request, closed by the teardown handler below."""
@@ -131,7 +146,7 @@ def create_app() -> Flask:
                 session["id"],
                 str(session.get("participantId", "unknown"))[:64],
                 identity.user_id,
-                int(session["age"]) if isinstance(session.get("age"), (int, float)) else None,
+                _clean_age(session.get("age")),
                 str(session["behaviorType"])[:32] if session.get("behaviorType") else None,
                 str(session["activityType"])[:32] if session.get("activityType") else None,
                 int(session.get("startTime") or 0),

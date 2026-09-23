@@ -62,7 +62,6 @@ CREATE TABLE IF NOT EXISTS events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_participant ON sessions(participant_id);
-CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id);
 """
 
@@ -98,7 +97,6 @@ CREATE TABLE IF NOT EXISTS events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_participant ON sessions(participant_id);
-CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id);
 """
 
@@ -164,6 +162,37 @@ def connection() -> Iterator[Connection]:
         conn.close()
 
 
+# Columns added after the first deployment, in the order they shipped.
+# CREATE TABLE IF NOT EXISTS leaves an existing table untouched, so these have to
+# be added explicitly or every insert naming them fails on an older database.
+_ADDED_SESSION_COLUMNS = (
+    ("user_id", "TEXT"),  # guest-first Clerk auth
+    ("age", "INTEGER"),  # user profile
+    ("behavior_type", "TEXT"),
+    ("activity_type", "TEXT"),
+)
+
+# Indexes on added columns. They must be created after the columns exist, which
+# is why they are not part of the CREATE scripts above.
+_ADDED_SESSION_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)",
+)
+
+
+def _add_missing_columns(conn: Connection) -> None:
+    if IS_POSTGRES:
+        for name, sql_type in _ADDED_SESSION_COLUMNS:
+            conn.execute(f"ALTER TABLE sessions ADD COLUMN IF NOT EXISTS {name} {sql_type}")
+    else:
+        existing = {row["name"] for row in conn.execute("PRAGMA table_info(sessions)").fetchall()}
+        for name, sql_type in _ADDED_SESSION_COLUMNS:
+            if name not in existing:
+                conn.execute(f"ALTER TABLE sessions ADD COLUMN {name} {sql_type}")
+
+    for statement in _ADDED_SESSION_INDEXES:
+        conn.execute(statement)
+
+
 def init_schema() -> None:
     with connection() as conn:
         schema = _POSTGRES_SCHEMA if IS_POSTGRES else _SQLITE_SCHEMA
@@ -172,6 +201,7 @@ def init_schema() -> None:
                 conn.execute(statement)
         else:
             conn._raw.executescript(schema)
+        _add_missing_columns(conn)
         conn.commit()
 
 
