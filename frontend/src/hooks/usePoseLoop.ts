@@ -21,6 +21,13 @@ export interface PoseFrame {
 const EMPTY: PoseFrame = { landmarks: null, metrics: null, deviationPct: 0, present: false, fps: 0 }
 
 /**
+ * Detection cadence while the tab is hidden. requestAnimationFrame does not run
+ * in background tabs, so a hidden tab falls back to a timer; browsers throttle
+ * that to about once a second, which is still plenty for posture.
+ */
+const HIDDEN_INTERVAL_MS = 500
+
+/**
  * Runs MediaPipe against the video element on every animation frame and
  * publishes the derived posture signal.
  *
@@ -56,7 +63,9 @@ export function usePoseLoop(
     }
 
     let raf = 0
+    let hiddenTimer = 0
     let publishTimer = 0
+    let onVisibility: (() => void) | null = null
     let cancelled = false
     let lastVideoTime = -1
     let lastFrameAt = performance.now()
@@ -75,9 +84,17 @@ export function usePoseLoop(
       if (cancelled) return
       setModelStatus('ready')
 
+      // rAF when visible (smooth, paused by the browser when hidden); a timer
+      // when hidden, so monitoring continues while the user works in another tab.
+      const schedule = () => {
+        if (cancelled) return
+        if (document.hidden) hiddenTimer = window.setTimeout(step, HIDDEN_INTERVAL_MS)
+        else raf = requestAnimationFrame(step)
+      }
+
       const step = () => {
         if (cancelled) return
-        raf = requestAnimationFrame(step)
+        schedule()
 
         const video = videoRef.current
         if (!video) return
@@ -113,7 +130,16 @@ export function usePoseLoop(
         onFrameRef.current?.(latest.current)
       }
 
-      raf = requestAnimationFrame(step)
+      // A rAF queued just before the tab hides would never fire, stalling the
+      // loop for as long as the tab stays hidden. Reschedule on every change.
+      onVisibility = () => {
+        cancelAnimationFrame(raf)
+        clearTimeout(hiddenTimer)
+        schedule()
+      }
+      document.addEventListener('visibilitychange', onVisibility)
+
+      schedule()
       // Mirror to React state at 10Hz: fast enough to feel live, slow enough
       // to keep the render cost off the detection loop.
       publishTimer = window.setInterval(() => setFrame({ ...latest.current }), 100)
@@ -124,7 +150,9 @@ export function usePoseLoop(
     return () => {
       cancelled = true
       cancelAnimationFrame(raf)
+      clearTimeout(hiddenTimer)
       clearInterval(publishTimer)
+      if (onVisibility) document.removeEventListener('visibilitychange', onVisibility)
     }
   }, [enabled, videoRef])
 

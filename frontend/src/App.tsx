@@ -12,7 +12,7 @@ import { SessionSummary } from './pages/SessionSummary'
 import { Data } from './pages/Data'
 import { Settings } from './pages/Settings'
 import { Privacy } from './pages/Privacy'
-import { startHeartbeat, stopHeartbeat, useSession } from './store/session'
+import { recoverOrphanedSessions, startHeartbeat, stopHeartbeat, useSession } from './store/session'
 import { useOnboarding } from './store/onboarding'
 import { setAuthTokenProvider, syncPending } from './lib/sync'
 import { useAuthState } from './auth/useAuthState'
@@ -29,8 +29,11 @@ export default function App() {
 
   useEffect(() => {
     startHeartbeat()
-    // Push anything a previous run left unsynced; failures are silent by design.
-    void syncPending()
+    // Close any session a previous page load never ended (crash, dead battery),
+    // then push everything unsynced. Failures are silent by design.
+    void recoverOrphanedSessions()
+      .catch(() => 0)
+      .then(() => syncPending())
     return stopHeartbeat
   }, [])
 

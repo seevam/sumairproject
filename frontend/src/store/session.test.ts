@@ -1,28 +1,66 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // The engine is pure timing logic; storage, sync and alert delivery are side
 // effects we stub so a test can advance an hour of session time instantly.
 vi.mock('../lib/db', () => ({
   saveSession: vi.fn(async () => undefined),
   appendEvent: vi.fn(async () => undefined),
+  listSessions: vi.fn(async () => []),
 }))
 vi.mock('../lib/sync', () => ({ queueSync: vi.fn() }))
 vi.mock('../lib/notify', () => ({ fireAlert: vi.fn() }))
 
 import { fireAlert } from '../lib/notify'
-import { ABSENCE_GRACE_SECONDS, BREAK_MIN_SECONDS, SNOOZE_MINUTES, useSession } from './session'
+import { listSessions, saveSession } from '../lib/db'
+import {
+  ABSENCE_GRACE_SECONDS,
+  BREAK_MIN_SECONDS,
+  CHECKPOINT_SECONDS,
+  MAX_TICK_CREDIT_SECONDS,
+  SNOOZE_MINUTES,
+  recoverOrphanedSessions,
+  useSession,
+} from './session'
 import { useSettings } from './settings'
 
-/** Advance the engine by `seconds` of session time, one heartbeat at a time. */
+/** Moves the mocked wall clock forward. */
+function passTime(ms: number) {
+  vi.setSystemTime(Date.now() + ms)
+}
+
+/**
+ * Advance by `seconds` of observed session time: each second a frame arrives
+ * and the heartbeat fires, as when the dashboard is open and the camera is live.
+ */
 function advance(seconds: number, deviationPct = 0, present = true) {
   for (let i = 0; i < seconds; i++) {
+    passTime(1000)
     useSession.getState().ingest(deviationPct, present)
     useSession.getState().tick()
   }
 }
 
+/** Heartbeats with no camera frames, as when the detection loop has stalled. */
+function tickWithoutFrames(seconds: number) {
+  for (let i = 0; i < seconds; i++) {
+    passTime(1000)
+    useSession.getState().tick()
+  }
+}
+
+afterEach(() => {
+  vi.useRealTimers()
+})
+
 beforeEach(async () => {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(new Date('2026-09-14T10:00:00Z'))
   vi.clearAllMocks()
+  // reset() keeps the dev clock speed on purpose, so a test that changes it
+  // would otherwise leak into every test after it.
+  useSession.getState().setTimeScale(1)
+  useSession.getState().setForcedDeviation(null)
+  useSession.getState().setForcedAbsent(false)
   useSession.getState().reset()
   useSettings.setState({ mode: 'entertainment', participantId: 'P-TEST' })
   useSettings.getState().updateMode(
@@ -273,5 +311,157 @@ describe('dev overrides', () => {
     useSession.getState().setTimeScale(60)
     advance(31) // 31 heartbeats x 60 = 31 minutes of session time
     expect(useSession.getState().phase).toBe('break_prompt')
+  })
+})
+
+describe('wall-clock timing', () => {
+  it('tracks real time when the heartbeat runs late', () => {
+    // MediaPipe on the main thread was measured delaying the 1Hz interval by up
+    // to 15%. Counting ticks would make every interval that much too long.
+    for (let i = 0; i < 100; i++) {
+      passTime(1150)
+      useSession.getState().ingest(0, true)
+      useSession.getState().tick()
+    }
+    expect(useSession.getState().elapsedSeconds).toBeCloseTo(115, 0)
+    expect(useSession.getState().sittingSeconds).toBeCloseTo(115, 0)
+  })
+
+  it('still reaches the break on time when timers are throttled to once a minute', () => {
+    // A background tab can see timers - and frames - once a minute.
+    for (let i = 0; i < 31; i++) {
+      passTime(60_000)
+      useSession.getState().ingest(0, true)
+      useSession.getState().tick()
+    }
+    expect(useSession.getState().phase).toBe('break_prompt')
+  })
+
+  it('does not count a laptop sleep as sitting', () => {
+    advance(60)
+    passTime(2 * 60 * 60 * 1000) // two hours asleep
+    useSession.getState().ingest(0, true)
+    useSession.getState().tick()
+
+    const s = useSession.getState()
+    expect(s.totalSittingSeconds).toBeLessThanOrEqual(60 + MAX_TICK_CREDIT_SECONDS)
+    expect(s.phase).toBe('active')
+  })
+})
+
+describe('when camera frames stop arriving', () => {
+  it('does not fire a posture alert on a stale reading', () => {
+    // The bug: one frame of slouching, then silence, used to produce an alert.
+    passTime(1000)
+    useSession.getState().ingest(30, true)
+    tickWithoutFrames(300)
+    expect(useSession.getState().postureAlerts).toBe(0)
+  })
+
+  it('pauses sitting time rather than guessing', () => {
+    advance(60)
+    const before = useSession.getState().sittingSeconds
+    tickWithoutFrames(600)
+    expect(useSession.getState().sittingSeconds).toBeLessThanOrEqual(before + 2)
+  })
+
+  it('does not mark the user absent just because it cannot see them', () => {
+    advance(30)
+    tickWithoutFrames(600)
+    expect(useSession.getState().absentSeconds).toBe(0)
+  })
+
+  it('reports that it is not observing, so the UI can say so', () => {
+    advance(10)
+    expect(useSession.getState().observing).toBe(true)
+    tickWithoutFrames(5)
+    expect(useSession.getState().observing).toBe(false)
+  })
+
+  it('resumes where it left off once frames return', () => {
+    advance(60)
+    tickWithoutFrames(120)
+    const paused = useSession.getState().sittingSeconds
+    advance(60)
+    expect(useSession.getState().sittingSeconds).toBeCloseTo(paused + 60, 0)
+    expect(useSession.getState().observing).toBe(true)
+  })
+
+  it('keeps the wall-clock duration running throughout', () => {
+    advance(60)
+    tickWithoutFrames(120)
+    expect(useSession.getState().elapsedSeconds).toBeCloseTo(180, 0)
+  })
+})
+
+describe('checkpointing', () => {
+  it('saves the session periodically, not only at start and end', () => {
+    vi.mocked(saveSession).mockClear()
+    advance(CHECKPOINT_SECONDS * 4)
+    expect(vi.mocked(saveSession).mock.calls.length).toBeGreaterThanOrEqual(3)
+  })
+
+  it('writes checkpoints as unfinished, with the duration so far', () => {
+    vi.mocked(saveSession).mockClear()
+    advance(CHECKPOINT_SECONDS + 1)
+    const last = vi.mocked(saveSession).mock.calls.at(-1)![0]
+    expect(last.endTime).toBeNull()
+    expect(last.durationSeconds).toBeGreaterThanOrEqual(CHECKPOINT_SECONDS)
+  })
+})
+
+describe('recoverOrphanedSessions', () => {
+  const orphan = (patch = {}) => ({
+    id: 's_orphan',
+    participantId: 'P-TEST',
+    age: null,
+    behaviorType: null,
+    activityType: null,
+    startTime: Date.now() - 60 * 60 * 1000,
+    endTime: null,
+    durationSeconds: 1200,
+    mode: 'study' as const,
+    avgDeviationPct: 10,
+    deviationSamples: 1200,
+    postureAlerts: 1,
+    breaksPrompted: 0,
+    breaksTaken: 0,
+    breaksSnoozed: 0,
+    sittingSeconds: 1200,
+    synced: true,
+    ...patch,
+  })
+
+  it('closes a session a crashed page left open, at its last checkpoint', async () => {
+    await useSession.getState().end()
+    const record = orphan()
+    vi.mocked(listSessions).mockResolvedValueOnce([record])
+    vi.mocked(saveSession).mockClear()
+
+    expect(await recoverOrphanedSessions()).toBe(1)
+    const saved = vi.mocked(saveSession).mock.calls[0][0]
+    expect(saved.endTime).toBe(record.startTime + 1200 * 1000)
+    expect(saved.synced).toBe(false) // so it is pushed to the server too
+  })
+
+  it('leaves a session another tab is still checkpointing alone', async () => {
+    await useSession.getState().end()
+    vi.mocked(listSessions).mockResolvedValueOnce([
+      orphan({ startTime: Date.now() - 1000 * 1000, durationSeconds: 995 }),
+    ])
+    vi.mocked(saveSession).mockClear()
+    expect(await recoverOrphanedSessions()).toBe(0)
+    expect(saveSession).not.toHaveBeenCalled()
+  })
+
+  it('never touches the session running in this tab', async () => {
+    const live = useSession.getState().sessionId!
+    vi.mocked(listSessions).mockResolvedValueOnce([orphan({ id: live })])
+    expect(await recoverOrphanedSessions()).toBe(0)
+  })
+
+  it('ignores sessions that already ended', async () => {
+    vi.mocked(listSessions).mockResolvedValueOnce([orphan({ endTime: Date.now() })])
+    expect(await recoverOrphanedSessions()).toBe(0)
   })
 })

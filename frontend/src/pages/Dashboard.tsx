@@ -67,6 +67,9 @@ export function Dashboard() {
   const intervalSeconds = modeSettings.breakIntervalMin * 60
   const untilBreak = Math.max(0, intervalSeconds - session.sittingSeconds)
   const absent = session.absentSeconds >= ABSENCE_GRACE_SECONDS
+  // No frames reaching the engine: timers are paused, which would otherwise
+  // look like the app had hung.
+  const trackingPaused = monitoring && session.phase === 'active' && !session.observing
 
   if (baselineLoaded && !baseline) {
     return (
@@ -89,7 +92,9 @@ export function Dashboard() {
           </h1>
           <p className="text-sm text-muted">
             {monitoring
-              ? absent
+              ? trackingPaused
+                ? 'Tracking paused - no camera frames are arriving. Timers resume on their own when they do.'
+                : absent
                 ? 'Timer paused - you are not in frame.'
                 : `${MODE_META[settings.mode].label} Mode - break every ${modeSettings.breakIntervalMin} min.`
               : 'Start a session to begin monitoring posture and sitting time.'}

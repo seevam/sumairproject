@@ -282,6 +282,36 @@ check('CSV contains the seeded row', body.includes('P-SEED'))
 console.log('     first two CSV lines:')
 body.split('\r\n').slice(0, 2).forEach((l) => console.log('       ' + l))
 
+console.log('\n== a crashed session is recovered into the dataset ==')
+// Simulates a tab that died mid-session: its last checkpoint is in storage
+// with no end time. Before the fix this session never reached the export.
+await page.evaluate(async () => {
+  const db = await new Promise((res, rej) => {
+    const r = indexedDB.open('postureguard', 1)
+    r.onsuccess = () => res(r.result)
+    r.onerror = () => rej(r.error)
+  })
+  await new Promise((res, rej) => {
+    const tx = db.transaction('sessions', 'readwrite')
+    tx.objectStore('sessions').put({
+      id: 'crashed1', participantId: 'P-CRASH', age: 15, behaviorType: 'gamer', activityType: 'gaming',
+      startTime: Date.now() - 3 * 3600000, endTime: null, durationSeconds: 1500, mode: 'entertainment',
+      avgDeviationPct: 14, deviationSamples: 1500, postureAlerts: 3,
+      breaksPrompted: 1, breaksTaken: 1, breaksSnoozed: 0, sittingSeconds: 1400, synced: false,
+    })
+    tx.oncomplete = res; tx.onerror = () => rej(tx.error)
+  })
+})
+await page.reload({ waitUntil: 'networkidle' }) // app start runs recovery
+await page.waitForTimeout(1200)
+const recoveredCsv = await Promise.all([
+  page.waitForEvent('download', { timeout: 10000 }),
+  page.getByRole('button', { name: 'Export sessions CSV' }).click(),
+]).then(async ([d]) => (await import('node:fs')).readFileSync(await d.path(), 'utf8'))
+const crashRow = recoveredCsv.split('\r\n').find((l) => l.includes('P-CRASH'))
+check('the crashed session appears in the export', Boolean(crashRow), 'row missing')
+check('its duration comes from the last checkpoint', Boolean(crashRow?.includes(',25,')), crashRow ?? '')
+
 console.log('\n== page health ==')
 check('no uncaught page errors', errors.length === 0, errors.slice(0, 3).join(' | '))
 check('every resource loaded', badResources.length === 0, badResources.slice(0, 4).join(' | '))

@@ -44,6 +44,24 @@ reaches any threshold.
 
 ---
 
+### Timing and reliability
+
+- **Timers use wall-clock time.** Every timer advances by the real time since
+  the previous heartbeat. Counting heartbeats was measured running up to 15%
+  slow while MediaPipe occupied the main thread, and browsers throttle timers in
+  background tabs.
+- **Only observed time counts.** Sitting time, absence and posture dwell accrue
+  only for intervals in which a camera frame actually arrived. If frames stop,
+  those timers pause and the dashboard says *Tracking paused* rather than
+  counting on a stale reading. One tick can credit at most 90 s, so waking a
+  laptop from sleep does not count the sleep as sitting.
+- **Background tabs.** `requestAnimationFrame` does not run in hidden tabs, so
+  the detection loop falls back to a timer there (throttled by the browser to
+  about once a second).
+- **Crash-safe sessions.** The in-progress session is saved every 30 s. On the
+  next load, any session a previous page never ended (crashed tab, dead battery)
+  is closed at its last checkpoint and included in the export.
+
 ## Design system
 
 The V1 mockup supersedes the original PRD palette: the background is a
@@ -185,8 +203,8 @@ or create `frontend/.env` with `VITE_API_BASE_URL=http://localhost:5000`.
 ## Tests
 
 ```bash
-cd frontend && npm test              # 96 unit tests: posture maths, calibration, CSV, sync, settings, session engine
-cd backend  && python -m pytest -q   # 22 API tests (SQLite)
+cd frontend && npm test              # 117 unit tests: posture maths, calibration, CSV, sync, settings, session engine
+cd backend  && python -m pytest -q   # 26 API tests (SQLite), incl. in-place upgrades of older databases
 
 # The backend suite must also pass against Postgres, which is what production uses:
 cd backend && DATABASE_URL=postgresql://... python -m pytest -q

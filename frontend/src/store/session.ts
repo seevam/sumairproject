@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { PostureState, SessionEvent, SessionEventType, SessionRecord } from '../types'
-import { appendEvent, saveSession } from '../lib/db'
+import { appendEvent, listSessions, saveSession } from '../lib/db'
 import { fireAlert } from '../lib/notify'
 import { useSettings } from './settings'
 import { queueSync } from '../lib/sync'
@@ -11,6 +11,24 @@ export const ABSENCE_GRACE_SECONDS = 60
 /** Landmark absence required for a break to count as complete (PRD 7.3). */
 export const BREAK_MIN_SECONDS = 180
 export const SNOOZE_MINUTES = 5
+
+/**
+ * Longest stretch of wall time a single tick may credit to sitting, absence or
+ * posture dwell. Throttled timers in a background tab can space ticks out to a
+ * minute; anything longer than this is a laptop waking from sleep, and sleep is
+ * not sitting.
+ */
+export const MAX_TICK_CREDIT_SECONDS = 90
+
+/** How often the in-progress session is written to storage. */
+export const CHECKPOINT_SECONDS = 30
+
+/**
+ * A tick credits observed time only if a camera frame arrived since the
+ * previous tick (allowing this much clock skew). Otherwise the engine cannot
+ * see the user, and must not keep counting on the last frame it happened to get.
+ */
+const FRAME_SLACK_MS = 1000
 
 export type Phase = 'idle' | 'active' | 'break_prompt' | 'break' | 'ended'
 
@@ -49,6 +67,18 @@ interface SessionState {
   deviationSum: number
   deviationSamples: number
   postureAlerts: number
+
+  /** Wall time of the previous tick; timers advance by real elapsed time. */
+  lastTickAt: number | null
+  /** Wall time of the most recent camera frame reaching the engine. */
+  lastFrameAt: number | null
+  /** Wall time of the last in-progress save. */
+  lastCheckpointAt: number | null
+  /**
+   * False while no camera frames are arriving (a stalled loop, a frozen tab).
+   * Sitting time, absence and posture dwell all pause rather than guess.
+   */
+  observing: boolean
 
   /** Dev/test only: multiplies how fast every timer advances. */
   timeScale: number
@@ -99,6 +129,10 @@ const initial: SessionState = {
   deviationSum: 0,
   deviationSamples: 0,
   postureAlerts: 0,
+  lastTickAt: null,
+  lastFrameAt: null,
+  lastCheckpointAt: null,
+  observing: true,
   timeScale: 1,
   forcedDeviation: null,
   forcedAbsent: false,
@@ -149,6 +183,8 @@ export const useSession = create<SessionState & SessionActions>()((set, get) => 
       sessionId: id,
       participantId: settings.participantId,
       startTime: Date.now(),
+      lastTickAt: Date.now(),
+      lastCheckpointAt: Date.now(),
       // Timer preferences are per-session, so keep whatever the dev panel set.
       timeScale: get().timeScale,
     })
@@ -183,52 +219,88 @@ export const useSession = create<SessionState & SessionActions>()((set, get) => 
     set({
       present: effectivePresent,
       deviationPct: effectivePresent ? effectiveDeviation : s.deviationPct,
+      lastFrameAt: Date.now(),
     })
   },
 
-  /** Advances every timer. Driven at 1Hz; timeScale multiplies the step. */
+  /**
+   * Advances every timer by the real time since the previous tick.
+   *
+   * Counting ticks instead would be wrong in two measured ways: the 1Hz
+   * interval drifts up to 15% slow while MediaPipe occupies the main thread,
+   * and browsers throttle timers in background tabs. Both would stretch every
+   * interval and understate every duration in the dataset.
+   */
   tick: () => {
     const s = get()
     if (s.phase === 'idle' || s.phase === 'ended') return
 
     const settings = useSettings.getState()
     const modeSettings = settings.active()
-    const step = s.timeScale
-    const patch: Partial<SessionState> = { elapsedSeconds: s.elapsedSeconds + step }
+    const now = Date.now()
+    const previousTick = s.lastTickAt ?? now
+    const elapsedWall = Math.max(0, (now - previousTick) / 1000)
+
+    // Wall-clock timers (session duration, break length, snooze) always run.
+    const wall = elapsedWall * s.timeScale
+
+    // Observed timers only run for time we could actually see the user. The dev
+    // overrides count as observation so a demo works without a camera.
+    const forced = s.forcedDeviation !== null || s.forcedAbsent
+    const frameArrived = s.lastFrameAt !== null && s.lastFrameAt >= previousTick - FRAME_SLACK_MS
+    const observed = forced || frameArrived
+    const step = observed ? Math.min(elapsedWall, MAX_TICK_CREDIT_SECONDS) * s.timeScale : 0
+
+    const patch: Partial<SessionState> = {
+      elapsedSeconds: s.elapsedSeconds + wall,
+      lastTickAt: now,
+      observing: observed,
+    }
+
+    const commit = (p: Partial<SessionState>) => {
+      set(p)
+      checkpoint(now)
+    }
 
     // --- presence -----------------------------------------------------------
-    if (s.present) {
-      if (s.absentSeconds >= ABSENCE_GRACE_SECONDS && s.sessionId) {
-        log(s.sessionId, 'user_present')
-      }
-      patch.absentSeconds = 0
-    } else {
-      patch.absentSeconds = s.absentSeconds + step
-      if (s.absentSeconds < ABSENCE_GRACE_SECONDS && s.absentSeconds + step >= ABSENCE_GRACE_SECONDS && s.sessionId) {
-        log(s.sessionId, 'user_absent')
+    // Presence only changes on evidence. With no frames, absence is unknown, so
+    // it neither accrues nor resets.
+    const present = s.forcedAbsent ? false : s.present
+    if (observed) {
+      if (present) {
+        if (s.absentSeconds >= ABSENCE_GRACE_SECONDS && s.sessionId) {
+          log(s.sessionId, 'user_present')
+        }
+        patch.absentSeconds = 0
+      } else {
+        patch.absentSeconds = s.absentSeconds + step
+        if (s.absentSeconds < ABSENCE_GRACE_SECONDS && s.absentSeconds + step >= ABSENCE_GRACE_SECONDS && s.sessionId) {
+          log(s.sessionId, 'user_absent')
+        }
       }
     }
 
-    const detected = s.present || s.absentSeconds + step < ABSENCE_GRACE_SECONDS
+    const absentSeconds = patch.absentSeconds ?? s.absentSeconds
+    const detected = observed && (present || absentSeconds < ABSENCE_GRACE_SECONDS)
 
     // --- break in progress --------------------------------------------------
     if (s.phase === 'break') {
-      patch.breakSeconds = s.breakSeconds + step
-      if (!s.present) patch.breakAbsenceSeconds = s.breakAbsenceSeconds + step
+      patch.breakSeconds = s.breakSeconds + wall
+      if (observed && !present) patch.breakAbsenceSeconds = s.breakAbsenceSeconds + step
 
       // The user came back after a full break: resume automatically.
-      if (s.present && s.breakAbsenceSeconds >= BREAK_MIN_SECONDS) {
-        set(patch)
+      if (observed && present && s.breakAbsenceSeconds >= BREAK_MIN_SECONDS) {
+        commit(patch)
         get().endBreak()
         return
       }
-      set(patch)
+      commit(patch)
       return
     }
 
     // --- snooze countdown ---------------------------------------------------
     if (s.snoozeSecondsRemaining > 0) {
-      const remaining = s.snoozeSecondsRemaining - step
+      const remaining = s.snoozeSecondsRemaining - wall
       patch.snoozeSecondsRemaining = Math.max(0, remaining)
       if (remaining <= 0 && s.phase === 'active') {
         patch.phase = 'break_prompt'
@@ -243,21 +315,22 @@ export const useSession = create<SessionState & SessionActions>()((set, get) => 
           urgent: true,
         })
       }
-      set(patch)
+      commit(patch)
       return
     }
 
     if (s.phase === 'break_prompt') {
-      set(patch)
+      commit(patch)
       return
     }
 
     // --- active session -----------------------------------------------------
     if (!detected) {
-      // Timer is paused while the user is away; nothing below should advance.
+      // Away from the desk, or not observable at all: nothing below advances,
+      // and a stale bad-posture reading cannot carry into a later alert.
       patch.postureState = 'absent'
       patch.sustainedSeconds = 0
-      set(patch)
+      commit(patch)
       return
     }
 
@@ -330,7 +403,7 @@ export const useSession = create<SessionState & SessionActions>()((set, get) => 
       })
     }
 
-    set(patch)
+    commit(patch)
   },
 
   startBreak: () => {
@@ -389,6 +462,47 @@ export const useSession = create<SessionState & SessionActions>()((set, get) => 
 
   reset: () => set({ ...initial, timeScale: get().timeScale }),
 }))
+
+/**
+ * Writes the in-progress session so an abrupt end - a crashed tab, a dead
+ * battery, a pagehide whose async save never finishes - loses at most one
+ * checkpoint interval instead of the whole session.
+ */
+function checkpoint(now: number): void {
+  const s = useSession.getState()
+  if (!s.sessionId || s.phase === 'idle' || s.phase === 'ended') return
+  if (s.lastCheckpointAt !== null && now - s.lastCheckpointAt < CHECKPOINT_SECONDS * 1000) return
+  useSession.setState({ lastCheckpointAt: now })
+  void saveSession(snapshot(useSession.getState(), false))
+}
+
+/**
+ * Closes sessions a previous page load never ended, using their last
+ * checkpoint, so they reach the dataset instead of being filtered out as
+ * unfinished. A session still being checkpointed by another open tab is left
+ * alone.
+ */
+export async function recoverOrphanedSessions(now = Date.now()): Promise<number> {
+  const live = useSession.getState().sessionId
+  const staleBefore = now - CHECKPOINT_SECONDS * 3 * 1000
+  let recovered = 0
+
+  for (const record of await listSessions()) {
+    if (record.endTime !== null || record.id === live) continue
+    const lastAlive = record.startTime + record.durationSeconds * 1000
+    if (lastAlive > staleBefore) continue
+
+    await saveSession({ ...record, endTime: lastAlive, synced: false })
+    await appendEvent({
+      sessionId: record.id,
+      type: 'session_end',
+      timestamp: lastAlive,
+      durationSeconds: record.durationSeconds,
+    })
+    recovered += 1
+  }
+  return recovered
+}
 
 /** Single 1Hz heartbeat for the whole app. Started once from App. */
 let heartbeat: number | null = null
