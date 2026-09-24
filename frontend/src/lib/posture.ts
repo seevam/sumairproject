@@ -24,12 +24,21 @@ export interface RawLandmark {
   visibility?: number
 }
 
+/**
+ * The landmarks the posture maths actually reads (see computeMetrics). Ears are
+ * drawn in the overlay but never measured, so they must not gate presence:
+ * glasses and hair routinely lower their visibility, and requiring them turned
+ * a clearly visible user into "not detected".
+ */
+const REQUIRED = [LM.nose, LM.leftShoulder, LM.rightShoulder] as const
+
 export function landmarksVisible(landmarks: RawLandmark[] | null | undefined): boolean {
   if (!landmarks || landmarks.length < 33) return false
-  return Object.values(LM).every((i) => {
+  return REQUIRED.every((i) => {
     const p = landmarks[i]
+    if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) return false
     // visibility is optional in the task API; absence means "reported, assume visible".
-    return p && (p.visibility === undefined || p.visibility >= MIN_VISIBILITY)
+    return p.visibility === undefined || p.visibility >= MIN_VISIBILITY
   })
 }
 

@@ -6,6 +6,7 @@ import { useCamera } from '../hooks/useCamera'
 import { usePoseLoop, type PoseFrame } from '../hooks/usePoseLoop'
 import { extractLandmarkMap, medianMetrics } from '../lib/posture'
 import { saveCalibration } from '../lib/db'
+import { getPoseDiagnostics, type PoseDiagnostics } from '../lib/poseEngine'
 import type { PostureMetrics } from '../types'
 
 const CAPTURE_SECONDS = 10
@@ -35,6 +36,7 @@ export function CalibrateActive() {
 
   // No baseline yet, so deviation is meaningless here; we only need presence.
   const { frame, modelStatus, modelError } = usePoseLoop(videoRef, status === 'ready', null, onFrame)
+  const diagnostics = useStallDiagnostics(modelStatus === 'ready' && stage === 'positioning' && !frame.present)
 
   const ready = status === 'ready' && modelStatus === 'ready' && frame.present
 
@@ -115,7 +117,9 @@ export function CalibrateActive() {
 
       {blocked ? (
         <div className="card space-y-3 border-danger/50 p-5">
-          <p className="font-semibold text-danger">Cannot start the camera</p>
+          <p className="font-semibold text-danger">
+            {modelStatus === 'error' ? 'Cannot start pose detection' : 'Cannot start the camera'}
+          </p>
           <p className="text-sm text-muted">{error ?? modelError}</p>
           <div className="flex gap-3">
             <button className="btn-secondary" onClick={() => window.location.reload()}>Try again</button>
@@ -172,6 +176,8 @@ export function CalibrateActive() {
                   />
                 </div>
 
+                {diagnostics && <DiagnosticsLine d={diagnostics} />}
+
                 <button className="btn-tertiary" onClick={() => navigate('/calibrate')}>
                   Cancel
                 </button>
@@ -180,6 +186,51 @@ export function CalibrateActive() {
           </div>
         </>
       )}
+    </div>
+  )
+}
+
+/** How long detection may find nobody before we show what it is doing. */
+const STALL_SECONDS = 8
+
+/**
+ * Returns live detection diagnostics once a stall has lasted STALL_SECONDS.
+ * Detection problems are machine-specific and cannot be reproduced remotely,
+ * so when calibration is stuck the screen shows exactly what the engine sees -
+ * a screenshot of this line is enough to diagnose it.
+ */
+function useStallDiagnostics(stalled: boolean): PoseDiagnostics | null {
+  const [diag, setDiag] = useState<PoseDiagnostics | null>(null)
+
+  useEffect(() => {
+    if (!stalled) {
+      setDiag(null)
+      return
+    }
+    const since = Date.now()
+    const id = window.setInterval(() => {
+      if (Date.now() - since >= STALL_SECONDS * 1000) setDiag(getPoseDiagnostics())
+    }, 1000)
+    return () => clearInterval(id)
+  }, [stalled])
+
+  return diag
+}
+
+function DiagnosticsLine({ d }: { d: PoseDiagnostics }) {
+  return (
+    <div className="rounded-btn border border-line bg-surface-2 p-3 text-xs leading-relaxed text-muted">
+      <p className="font-medium text-white">Still looking for you.</p>
+      <p>
+        Sit so your face and both shoulders are visible, with light in front of you rather than
+        behind. If you are clearly in frame, send a screenshot of this box:
+      </p>
+      <p className="tabular mt-1.5 font-mono text-[11px]">
+        {d.backend ?? '?'} - {d.framesAnalysed} frames - {d.posesFound} poses - {d.errors} errors -{' '}
+        {d.invalidResults} invalid - {d.crossChecks} checks
+        {d.fallbackReason && <><br />fallback: {d.fallbackReason}</>}
+        {d.lastError && <><br />last error: {d.lastError}</>}
+      </p>
     </div>
   )
 }

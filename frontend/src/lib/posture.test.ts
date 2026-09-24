@@ -94,6 +94,20 @@ describe('landmarksVisible', () => {
     expect(landmarksVisible(hidden)).toBe(false)
   })
 
+  it('does not require the ears, which the maths never reads', () => {
+    // Glasses and hair lower ear visibility; that must not hide a clear user.
+    const glasses = pose([0.5, 0.25], [0.33, 0.6], [0.67, 0.6])
+    glasses[7] = { ...glasses[7], visibility: 0.1 }
+    glasses[8] = { ...glasses[8], visibility: 0.1 }
+    expect(landmarksVisible(glasses)).toBe(true)
+  })
+
+  it('rejects non-finite coordinates from a broken delegate', () => {
+    const broken = pose([0.5, 0.25], [0.33, 0.6], [0.67, 0.6])
+    broken[0] = { ...broken[0], x: Number.NaN }
+    expect(landmarksVisible(broken)).toBe(false)
+  })
+
   it('rejects missing landmarks', () => {
     expect(landmarksVisible(null)).toBe(false)
     expect(landmarksVisible([])).toBe(false)

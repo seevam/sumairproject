@@ -58,6 +58,13 @@ reaches any threshold.
 - **Background tabs.** `requestAnimationFrame` does not run in hidden tabs, so
   the detection loop falls back to a timer there (throttled by the browser to
   about once a second).
+- **GPU fallback.** MediaPipe's GPU delegate can load fine and then fail
+  silently on a particular machine: throwing every frame, returning NaN, or
+  never finding a pose. Each is detected at runtime; an empty run is
+  cross-checked by running the same frame on the CPU, so an empty room is not
+  mistaken for a broken GPU. On a confirmed failure the engine switches to CPU
+  and remembers that for the device. MediaPipe needs WebGL on *both* delegates,
+  so a browser with WebGL off gets a message explaining how to turn it on.
 - **Crash-safe sessions.** The in-progress session is saved every 30 s. On the
   next load, any session a previous page never ended (crashed tab, dead battery)
   is closed at its last checkpoint and included in the export.
@@ -223,6 +230,13 @@ npm run build && npm run preview &
 npm run smoke
 # or against a deployment:
 SMOKE_BASE_URL=https://your-app.vercel.app npm run smoke
+```
+
+Detection under simulated GPU failures (needs a Y4M clip of a real person -
+never commit one, it is a participant's image):
+
+```bash
+PERSON_Y4M=/path/to/person.y4m npm run test:detection
 ```
 
 A second end-to-end script covers the deployed topology — that sync stays off

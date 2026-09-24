@@ -13,7 +13,8 @@
     "smoke": "node scripts/smoke.mjs",
     "sync:wasm": "cp node_modules/@mediapipe/tasks-vision/wasm/* public/wasm/",
     "postinstall": "node -e \"require('fs').mkdirSync('public/wasm',{recursive:true})\" && npm run sync:wasm",
-    "test:sync": "node scripts/sync-e2e.mjs"
+    "test:sync": "node scripts/sync-e2e.mjs",
+    "test:detection": "node scripts/detection-fallback.mjs"
   },
   "dependencies": {
     "@clerk/clerk-react": "^5.61.9",
